@@ -89,6 +89,7 @@ Owns protected operational actions and diagnostics for administrators.
 
 ## Error Taxonomy
 
+- `CONTROL_PLANE_BAD_REQUEST`
 - `CONTROL_PLANE_UNAUTHORIZED`
 - `CONTROL_PLANE_FORBIDDEN`
 - `CONTROL_PLANE_CONFLICT`

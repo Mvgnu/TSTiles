@@ -23,6 +23,32 @@ test("retry policy retries failed operations", async (): Promise<void> => {
   try {
     await withRetry(async () => {
       attempts += 1;
+      const timeoutError = Object.assign(new Error("opaque transport failure"), { code: "ETIMEDOUT" });
+      throw timeoutError;
+    }, { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 });
+    assert.fail("expected ETIMEDOUT to retry and surface timeout");
+  } catch (error: unknown) {
+    assert.equal(attempts, 2);
+    assert.equal((error as { code?: string }).code, StorageErrorCode.TIMEOUT);
+  }
+
+  attempts = 0;
+  try {
+    await withRetry(async () => {
+      attempts += 1;
+      const notFoundError = Object.assign(new Error("opaque missing"), { code: "ENOENT" });
+      throw notFoundError;
+    }, { maxAttempts: 5, baseDelayMs: 0, maxDelayMs: 0 });
+    assert.fail("expected ENOENT to stop retries");
+  } catch (error: unknown) {
+    assert.equal(attempts, 1);
+    assert.equal((error as { code?: string }).code, StorageErrorCode.NOT_FOUND);
+  }
+
+  attempts = 0;
+  try {
+    await withRetry(async () => {
+      attempts += 1;
       throw new Error("network timeout");
     }, { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 });
     assert.fail("expected retry to surface timeout");

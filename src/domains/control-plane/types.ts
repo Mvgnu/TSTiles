@@ -12,6 +12,7 @@ export type ControlPlaneOperation =
 export type ControlPlaneOutcome = "ok" | "failed";
 
 export const enum ControlPlaneErrorCode {
+  BAD_REQUEST = "CONTROL_PLANE_BAD_REQUEST",
   UNAUTHORIZED = "CONTROL_PLANE_UNAUTHORIZED",
   FORBIDDEN = "CONTROL_PLANE_FORBIDDEN",
   CONFLICT = "CONTROL_PLANE_CONFLICT",

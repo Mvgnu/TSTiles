@@ -31,6 +31,10 @@ export function sanitizeToken(token?: string): string {
   return `${head}…${tail}`;
 }
 
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
 export function isTileCoordinates(value: unknown): value is TileCoordinates {
   if (!value || typeof value !== "object") {
     return false;
@@ -39,14 +43,7 @@ export function isTileCoordinates(value: unknown): value is TileCoordinates {
   const z = candidate.z;
   const x = candidate.x;
   const y = candidate.y;
-  return (
-    Number.isInteger(z as number) &&
-    Number.isInteger(x as number) &&
-    Number.isInteger(y as number) &&
-    (z as number) >= 0 &&
-    (x as number) >= 0 &&
-    (y as number) >= 0
-  );
+  return isNonNegativeInteger(z) && isNonNegativeInteger(x) && isNonNegativeInteger(y);
 }
 
 export function createDeliverySignal(input: {

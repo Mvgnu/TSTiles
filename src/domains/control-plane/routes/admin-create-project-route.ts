@@ -1,6 +1,5 @@
 import { createProjectEndpoint } from "../control-plane.service";
 import { isAuthorized } from "../auth/admin-auth";
-import type { ProjectCreationInput } from "../../projects/types";
 import {
   adminErrorResponse,
   adminJsonResponse,
@@ -8,7 +7,7 @@ import {
   unauthorizedAdminResponse,
 } from "./response";
 
-export async function adminCreateProjectRoute(token: string, input: ProjectCreationInput): Promise<AdminRouteResponse> {
+export async function adminCreateProjectRoute(token: string, input: unknown): Promise<AdminRouteResponse> {
   if (!isAuthorized(token)) {
     return unauthorizedAdminResponse();
   }

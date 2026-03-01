@@ -7,9 +7,13 @@ paths:
   components: src/domains/storage/adapters/
   tests: src/domains/storage/__tests__/
 exports:
+  - StorageError
+  - StorageErrorCode
   - ObjectStore
+  - ObjectMetadata
   - RangeReadRequest
   - RangeReadResult
+  - RetryPolicy
   - createObjectStore
 consumes:
   - config.RuntimeConfig

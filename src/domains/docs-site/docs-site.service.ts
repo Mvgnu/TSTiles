@@ -2,6 +2,8 @@ import type {
   DocsIndex,
   ExampleBundle,
   OpenApiDocument,
+  OpenApiMethodKey,
+  OpenApiPathMethods,
   OpenApiRoute,
 } from "./types";
 import { listStyles } from "../styles/styles.service";
@@ -273,20 +275,27 @@ const routes = [...quickstartTiles, ...styleRoutes, ...rasterRoutes, ...docsRout
 function buildPaths(entries: ReadonlyArray<OpenApiRoute>): OpenApiDocument["paths"] {
   const out: OpenApiDocument["paths"] = {};
   for (const entry of entries) {
-    const pathMethods = out[entry.path];
-    if (pathMethods === undefined) {
-      out[entry.path] = {
-        [entry.method.toLowerCase()]: {
-          summary: entry.summary,
-        },
-      };
-      continue;
-    }
-    (pathMethods as Record<string, { summary: string }>)[entry.method.toLowerCase()] = {
+    const method = toOpenApiMethod(entry.method);
+    const pathMethods: OpenApiPathMethods = out[entry.path] ?? {};
+    pathMethods[method] = {
       summary: entry.summary,
     };
+    out[entry.path] = pathMethods;
   }
   return out;
+}
+
+function toOpenApiMethod(method: OpenApiRoute["method"]): OpenApiMethodKey {
+  if (method === "GET") {
+    return "get";
+  }
+  if (method === "HEAD") {
+    return "head";
+  }
+  if (method === "OPTIONS") {
+    return "options";
+  }
+  return "post";
 }
 
 function getDefaultStyleId(): string {

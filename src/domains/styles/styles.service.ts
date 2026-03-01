@@ -28,6 +28,10 @@ function isString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function isTemplateWithoutRawToken(value: string): boolean {
   const hasRawToken = value.includes("pk.") || value.includes("sk.");
   const hasCredentialQuery = /access_token=[^\s#]*/.test(value);
@@ -58,7 +62,7 @@ function validateSourceTileUrl(label: string, url: unknown): void {
   }
 }
 
-function validateSourceSourceObject(source: Record<string, unknown>, sourceName: string): void {
+function validateSourceSourceObject(source: unknown, sourceName: string): void {
   if (sourceName.trim() === "") {
     return;
   }
@@ -66,8 +70,9 @@ function validateSourceSourceObject(source: Record<string, unknown>, sourceName:
     throw buildError(StyleErrorCode.INVALID_DOCUMENT, `style source ${sourceName} must be an object`);
   }
 
-  const sourceUrl = source.url;
-  const sourceTiles = source.tiles;
+  const sourceRecord = source as Record<string, unknown>;
+  const sourceUrl = sourceRecord.url;
+  const sourceTiles = sourceRecord.tiles;
 
   if (sourceUrl !== undefined) {
     validateSourceTileUrl(`source ${sourceName}`, sourceUrl);
@@ -90,10 +95,9 @@ function validateSourceSourceObject(source: Record<string, unknown>, sourceName:
   throw buildError(StyleErrorCode.INVALID_DOCUMENT, `source ${sourceName} must include url or tiles`);
 }
 
-function validateSourceObject(document: StyleInput): void {
-  const sourceCollection = document.sources as Record<string, unknown>;
-  for (const [sourceName, source] of Object.entries(sourceCollection)) {
-    validateSourceSourceObject(source as Record<string, unknown>, sourceName);
+function validateSourceObject(sources: Record<string, unknown>): void {
+  for (const [sourceName, source] of Object.entries(sources)) {
+    validateSourceSourceObject(source, sourceName);
   }
 }
 
@@ -128,10 +132,10 @@ function buildError(code: StyleErrorCode, message: string): StyleError {
 }
 
 function normalizeStyleInput(input: unknown): StyleInput {
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
+  if (!isRecord(input)) {
     throw buildError(StyleErrorCode.INVALID_DOCUMENT, "Invalid style document");
   }
-  return input as Record<string, unknown>;
+  return input;
 }
 
 function normalizeRequiredIdentifier(value: string, field: string): string {
@@ -172,20 +176,20 @@ export function buildDefaultStyleTemplate(config: StyleTemplateConfig): StyleDoc
   };
 }
 
-function assertValidStyleDocument(document: StyleInput): void {
+function assertValidStyleDocument(document: StyleInput): asserts document is StyleDocument {
   const version = document.version;
   const sources = document.sources;
   if (typeof version !== "number" || version < 8) {
     throw buildError(StyleErrorCode.INVALID_DOCUMENT, "Style JSON must include mapbox version");
   }
-  if (!sources || typeof sources !== "object" || Array.isArray(sources)) {
+  if (!isRecord(sources)) {
     throw buildError(StyleErrorCode.INVALID_DOCUMENT, "Style JSON must include a sources object");
   }
   const serialized = JSON.stringify(document);
   if (serialized.includes("pk.") || serialized.includes("sk.")) {
     throw buildError(StyleErrorCode.INVALID_DOCUMENT, "Style JSON must not contain raw credentials");
   }
-  validateSourceObject(document);
+  validateSourceObject(sources);
   validateSpriteTemplate(document.sprites);
   validateGlyphTemplate(document.glyphs);
 }
@@ -250,7 +254,7 @@ export function getStyle(styleId: string, versionId?: string): StyleDocument {
 
 export function createStyleVersion(styleId: string, input: unknown): StyleVersion {
   const normalizedStyleId = normalizeRequiredIdentifier(styleId, "styleId");
-  const document = normalizeStyleInput(input) as StyleDocument;
+  const document = normalizeStyleInput(input);
   assertValidStyleDocument(document);
   const existing = styles.get(normalizedStyleId);
   const createdAt = new Date().toISOString();

@@ -15,10 +15,11 @@ import {
 import type { IngestRunReport } from "../ingest/types";
 import { isAuthorized } from "./auth/admin-auth";
 import { createProject, rotateApiKey } from "../projects/projects.service";
+import { ProjectsError, ProjectsErrorCode, type ProjectCreationInput, type ProjectPolicy } from "../projects/types";
 import { createStyleVersion, publishStyleVersion } from "../styles/styles.service";
+import { StyleError, StyleErrorCode } from "../styles/types";
 import { getUsageSummary } from "../metering/metering.service";
 import type { UsageCounterWindow } from "../metering/types";
-import type { ProjectCreationInput } from "../projects/types";
 
 const jobCounter = new Map<string, number>();
 const recentJobs = new Map<string, JobMetadata>();
@@ -27,23 +28,6 @@ const auditLog: AuditEvent[] = [];
 
 const AUDIT_RETENTION = 50;
 const JOB_RETENTION = 25;
-const conflictErrorCodes = new Set([
-  "PROJECTS_PROJECT_NOT_FOUND",
-  "STYLE_NOT_FOUND",
-  "STYLE_VERSION_NOT_FOUND",
-  "STYLE_PUBLISH_CONFLICT",
-]);
-
-function extractErrorCode(error: unknown): string | undefined {
-  if (!(error instanceof Error)) {
-    return undefined;
-  }
-  const withCode = error as Error & { code?: unknown };
-  if (typeof withCode.code === "string" && withCode.code.length > 0) {
-    return withCode.code;
-  }
-  return undefined;
-}
 
 function normalizeErrorMessage(error: unknown): string {
   if (error instanceof Error && "code" in error) {
@@ -120,23 +104,37 @@ function addJob(job: JobMetadata): void {
 function normalizeRequiredId(value: string, label: string): string {
   const normalized = value.trim();
   if (normalized.length === 0) {
-    throw new Error(`${label} is required`);
+    throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, `${label} is required`);
   }
   return normalized;
 }
 
-function mapDomainConflict(error: unknown): never {
-  if (error instanceof ControlPlaneError) {
-    throw error;
+function parseCreateProjectInput(input: unknown): ProjectCreationInput {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "Project payload is required");
   }
-  const code = extractErrorCode(error);
-  if (code !== undefined && conflictErrorCodes.has(code)) {
-    throw new ControlPlaneError(
-      ControlPlaneErrorCode.CONFLICT,
-      error instanceof Error ? error.message : code,
-    );
+  const candidate = input as {
+    readonly name?: unknown;
+    readonly policy?: unknown;
+    readonly planId?: unknown;
+  };
+  if (typeof candidate.name !== "string" || candidate.name.trim().length === 0) {
+    throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "Project name is required");
   }
-  throw error instanceof Error ? error : new Error("Control plane operation failed");
+  if (candidate.planId !== undefined && typeof candidate.planId !== "string") {
+    throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "planId must be a string");
+  }
+  if (
+    candidate.policy !== undefined
+    && (typeof candidate.policy !== "object" || candidate.policy === null || Array.isArray(candidate.policy))
+  ) {
+    throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "policy must be an object");
+  }
+  return {
+    name: candidate.name.trim(),
+    planId: candidate.planId,
+    policy: candidate.policy as Partial<ProjectPolicy> | undefined,
+  };
 }
 
 function assertAdmin(actorToken?: string): string {
@@ -159,6 +157,31 @@ function replaceJob(job: JobMetadata): void {
 }
 
 function toControlPlaneError(error: unknown): never {
+  if (error instanceof ControlPlaneError) {
+    throw error;
+  }
+  if (error instanceof ProjectsError) {
+    if (error.code === ProjectsErrorCode.PROJECT_NOT_FOUND) {
+      throw new ControlPlaneError(ControlPlaneErrorCode.CONFLICT, error.message);
+    }
+    if (error.code === ProjectsErrorCode.POLICY_INVALID || error.code === ProjectsErrorCode.KEY_INVALID) {
+      throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, error.message);
+    }
+    throw new ControlPlaneError(ControlPlaneErrorCode.DEPENDENCY_FAILED, error.message);
+  }
+  if (error instanceof StyleError) {
+    if (
+      error.code === StyleErrorCode.NOT_FOUND
+      || error.code === StyleErrorCode.VERSION_NOT_FOUND
+      || error.code === StyleErrorCode.PUBLISH_CONFLICT
+    ) {
+      throw new ControlPlaneError(ControlPlaneErrorCode.CONFLICT, error.message);
+    }
+    if (error.code === StyleErrorCode.BAD_REQUEST || error.code === StyleErrorCode.INVALID_DOCUMENT) {
+      throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, error.message);
+    }
+    throw new ControlPlaneError(ControlPlaneErrorCode.DEPENDENCY_FAILED, error.message);
+  }
   if (error instanceof ArtifactError) {
     if (error.code === ArtifactErrorCode.NOT_FOUND || error.code === ArtifactErrorCode.PROMOTION_CONFLICT || error.code === ArtifactErrorCode.ROLLBACK_UNAVAILABLE) {
       throw new ControlPlaneError(ControlPlaneErrorCode.CONFLICT, error.message);
@@ -320,36 +343,12 @@ export function rollbackArtifactEndpoint(actorToken?: string): ReturnType<typeof
   }
 }
 
-export function createProjectEndpoint(input: ProjectCreationInput & { name?: string }, actorToken?: string): ReturnType<typeof createProject> {
+export function createProjectEndpoint(input: unknown, actorToken?: string): ReturnType<typeof createProject> {
   const actor = assertAdmin(actorToken);
   const startedAt = new Date().toISOString();
   try {
-    if (!input || typeof input !== "object" || Array.isArray(input)) {
-      throw new Error("Project payload is required");
-    }
-    const candidate = input as {
-      readonly name?: unknown;
-      readonly policy?: unknown;
-      readonly planId?: unknown;
-    };
-    const name = typeof candidate.name === "string" ? candidate.name.trim() : "";
-    if (name.length === 0) {
-      throw new Error("Project name is required");
-    }
-    if (candidate.planId !== undefined && typeof candidate.planId !== "string") {
-      throw new Error("planId must be a string");
-    }
-    if (
-      candidate.policy !== undefined &&
-      (typeof candidate.policy !== "object" || candidate.policy === null || Array.isArray(candidate.policy))
-    ) {
-      throw new Error("policy must be an object");
-    }
-    const created = createProject({
-      name,
-      policy: candidate.policy as ProjectCreationInput["policy"],
-      planId: candidate.planId,
-    });
+    const parsedInput = parseCreateProjectInput(input);
+    const created = createProject(parsedInput);
     addAudit({
       actor,
       operation: "create_project",
@@ -368,7 +367,7 @@ export function createProjectEndpoint(input: ProjectCreationInput & { name?: str
       completedAt: new Date().toISOString(),
       message: normalizeErrorMessage(error),
     });
-    throw error instanceof Error ? error : new Error("Project creation failed");
+    toControlPlaneError(error);
   }
 }
 
@@ -396,7 +395,7 @@ export function rotateApiKeyEndpoint(projectId: string, actorToken?: string): Re
       completedAt: new Date().toISOString(),
       message: normalizeErrorMessage(error),
     });
-    mapDomainConflict(error);
+    toControlPlaneError(error);
   }
 }
 
@@ -440,7 +439,7 @@ export function createStyleVersionEndpoint(styleId: string, input: unknown, acto
       completedAt: new Date().toISOString(),
       message: normalizeErrorMessage(error),
     });
-    mapDomainConflict(error);
+    toControlPlaneError(error);
   }
 }
 
@@ -469,7 +468,7 @@ export function publishStyleVersionEndpoint(styleId: string, versionId: string, 
       completedAt: new Date().toISOString(),
       message: normalizeErrorMessage(error),
     });
-    mapDomainConflict(error);
+    toControlPlaneError(error);
   }
 }
 

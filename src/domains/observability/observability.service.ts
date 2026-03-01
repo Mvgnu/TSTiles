@@ -23,6 +23,10 @@ interface SLOThresholdPolicy {
   readonly errorCriticalThreshold: number;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function normalizeSignalPath(path: string): string {
   const [withoutQuery] = path.split("?");
   const normalizedPath = withoutQuery || "/";
@@ -78,38 +82,43 @@ function purgeExpiredWindows(nowMs: number): void {
 }
 
 function validateSignal(signal: unknown): DeliverySignal {
-  if (!signal || typeof signal !== "object") {
+  if (!isRecord(signal)) {
     throw new ObservabilityError(ObservabilityErrorCode.SIGNAL_SCHEMA_INVALID, "Invalid delivery signal");
   }
-  const candidate = signal as Record<string, unknown>;
-  const artifactVersion = typeof candidate.artifactVersion === "string"
-    ? candidate.artifactVersion.trim()
+  const artifactVersion = typeof signal.artifactVersion === "string"
+    ? signal.artifactVersion.trim()
     : "";
-  const tilePath = typeof candidate.tilePath === "string"
-    ? candidate.tilePath.trim()
+  const tilePath = typeof signal.tilePath === "string"
+    ? signal.tilePath.trim()
     : "";
-  const normalizedMethod = candidate.normalizedMethod;
-  const schemaVersion = candidate.schemaVersion;
+  const normalizedMethod = signal.normalizedMethod;
+  const schemaVersion = signal.schemaVersion;
+  const cacheStatus = signal.cacheStatus;
+  const originRead = signal.originRead;
+  const responseBytes = signal.responseBytes;
+  const latencyMs = signal.latencyMs;
+  const statusCode = signal.statusCode;
+  const receivedAt = signal.receivedAt;
   if (
     artifactVersion.length === 0 ||
     tilePath.length === 0 ||
     !tilePath.startsWith("/") ||
-    (candidate.cacheStatus !== "hit" && candidate.cacheStatus !== "miss") ||
-    typeof candidate.originRead !== "boolean" ||
-    typeof candidate.responseBytes !== "number" ||
-    !Number.isFinite(candidate.responseBytes) ||
-    candidate.responseBytes < 0 ||
-    typeof candidate.latencyMs !== "number" ||
-    !Number.isFinite(candidate.latencyMs) ||
-    candidate.latencyMs < 0 ||
-    typeof candidate.statusCode !== "number" ||
-    !Number.isFinite(candidate.statusCode) ||
-    !Number.isInteger(candidate.statusCode) ||
-    candidate.statusCode < 100 ||
-    candidate.statusCode > 599 ||
-    typeof candidate.receivedAt !== "string" ||
-    candidate.receivedAt.length === 0 ||
-    Number.isNaN(Date.parse(candidate.receivedAt)) ||
+    (cacheStatus !== "hit" && cacheStatus !== "miss") ||
+    typeof originRead !== "boolean" ||
+    typeof responseBytes !== "number" ||
+    !Number.isFinite(responseBytes) ||
+    responseBytes < 0 ||
+    typeof latencyMs !== "number" ||
+    !Number.isFinite(latencyMs) ||
+    latencyMs < 0 ||
+    typeof statusCode !== "number" ||
+    !Number.isFinite(statusCode) ||
+    !Number.isInteger(statusCode) ||
+    statusCode < 100 ||
+    statusCode > 599 ||
+    typeof receivedAt !== "string" ||
+    receivedAt.length === 0 ||
+    Number.isNaN(Date.parse(receivedAt)) ||
     typeof schemaVersion !== "number" ||
     schemaVersion !== CONTRACT_SCHEMA_VERSION ||
     (normalizedMethod !== "GET" && normalizedMethod !== "HEAD" && normalizedMethod !== "OPTIONS")
@@ -120,13 +129,13 @@ function validateSignal(signal: unknown): DeliverySignal {
     schemaVersion: CONTRACT_SCHEMA_VERSION,
     artifactVersion,
     tilePath,
-    cacheStatus: candidate.cacheStatus,
-    originRead: candidate.originRead,
-    responseBytes: candidate.responseBytes,
-    latencyMs: candidate.latencyMs,
-    statusCode: candidate.statusCode,
+    cacheStatus,
+    originRead,
+    responseBytes,
+    latencyMs,
+    statusCode,
     normalizedMethod,
-    receivedAt: candidate.receivedAt,
+    receivedAt,
   };
 }
 

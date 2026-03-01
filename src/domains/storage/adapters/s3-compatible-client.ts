@@ -10,13 +10,19 @@ const etagFromBytes = (bytes: Uint8Array): string => {
   return createHash("sha256").update(bytes).digest("hex");
 };
 
+function buildMissingObjectError(key: string): Error & { code: string } {
+  const error = new Error(`not found: ${key}`) as Error & { code: string };
+  error.code = "ENOENT";
+  return error;
+}
+
 export class InMemoryObjectStoreClient {
   private readonly objects = new Map<string, StoredObject>();
 
   public async get(key: string, start?: number, end?: number): Promise<RangeReadResult> {
     const stored = this.objects.get(key);
     if (!stored) {
-      throw new Error(`not found: ${key}`);
+      throw buildMissingObjectError(key);
     }
 
     const totalBytes = stored.data.byteLength;
@@ -39,7 +45,7 @@ export class InMemoryObjectStoreClient {
   public async head(key: string): Promise<ObjectMetadata> {
     const stored = this.objects.get(key);
     if (!stored) {
-      throw new Error(`not found: ${key}`);
+      throw buildMissingObjectError(key);
     }
     return {
       ...stored.metadata,

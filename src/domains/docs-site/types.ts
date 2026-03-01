@@ -19,6 +19,14 @@ export interface OpenApiRoute {
   readonly summary: string;
 }
 
+export type OpenApiMethodKey = "get" | "head" | "options" | "post";
+
+export interface OpenApiOperation {
+  readonly summary: string;
+}
+
+export type OpenApiPathMethods = Partial<Record<OpenApiMethodKey, OpenApiOperation>>;
+
 export interface ApiExample {
   readonly name: string;
   readonly description: string;
@@ -39,7 +47,7 @@ export interface OpenApiDocument {
     readonly title: string;
     readonly version: string;
   };
-  readonly paths: Record<string, unknown>;
+  readonly paths: Record<string, OpenApiPathMethods>;
 }
 
 export interface DocsContext {

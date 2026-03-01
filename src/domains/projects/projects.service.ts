@@ -54,8 +54,8 @@ function buildKeyId(rawHash: string): string {
   return `k_${rawHash.slice(0, 12)}`;
 }
 
-function keyIdHash(keyId: string): string {
-  return createHash("sha256").update(keyId).digest("hex").slice(0, 16);
+function keyIdHashFromKeyHash(keyHash: string): string {
+  return keyHash.slice(0, 16);
 }
 
 function isPositiveInteger(value: unknown): value is number {
@@ -247,7 +247,7 @@ function registerApiKey(projectId: string, rawToken: string): ApiKeyRecord {
     projectId,
     keyId,
     keyHash,
-    keyIdHash: keyIdHash(keyId),
+    keyIdHash: keyIdHashFromKeyHash(keyHash),
     createdAt: new Date().toISOString(),
     revoked: false,
   };

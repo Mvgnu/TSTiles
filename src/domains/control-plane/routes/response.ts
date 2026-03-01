@@ -22,6 +22,9 @@ export function adminJsonResponse(
 }
 
 function controlPlaneErrorStatus(code: ControlPlaneErrorCode): number {
+  if (code === ControlPlaneErrorCode.BAD_REQUEST) {
+    return 400;
+  }
   if (code === ControlPlaneErrorCode.UNAUTHORIZED) {
     return 401;
   }
