@@ -19,6 +19,7 @@ exports:
   - healthStatusEndpoint
 consumes:
   - ingest.runIngestPipeline
+  - ingest.buildDefaultSnapshot
   - artifact.listArtifacts
   - artifact.registerArtifact
   - artifact.promoteArtifact

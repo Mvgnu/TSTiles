@@ -4,7 +4,6 @@ const tilePathPattern = /^\/(?:v1\/)?tiles\/(\d+)\/(\d+)\/(\d+)\.mvt$/;
 const rasterPathPattern = /^\/(?:v1\/)?raster\/([^/]+)\/(\d+)\/(\d+)\/(\d+)\.(?:png|webp)$/;
 const staticPathPattern = /^\/(?:v1\/)?static\/([^/]+)\/(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(\d+(?:\.\d+)?)\/([1-9]\d*)x([1-9]\d*)\.(?:png|webp)$/;
 const metadataPath = "/tiles/metadata";
-const metadataPathV1 = "/v1/tiles/metadata";
 const maxStaticDimension = 4096;
 const maxStaticZoom = 30;
 const maxRasterZoom = 30;
@@ -98,8 +97,7 @@ export function isValidRequestPath(path: string): boolean {
   return isValidTilePath(normalized)
     || rasterMatch !== null
     || staticMatch !== null
-    || normalized === metadataPath
-    || normalized === metadataPathV1.replace(/^\/v1\//, "/");
+    || normalized === metadataPath;
 }
 
 export function isValidMethod(method: HttpMethod): boolean {

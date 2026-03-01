@@ -20,6 +20,7 @@ consumes:
   - styles.listStyles
   - styles.getStyle
   - styles.publishStyleVersion
+  - control_plane.auth
 verification:
   typecheck: "npx tsc --noEmit"
   test: "vitest run src/domains/studio/__tests__/ --globals --passWithNoTests"

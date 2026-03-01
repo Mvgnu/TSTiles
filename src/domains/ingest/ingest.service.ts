@@ -31,6 +31,7 @@ export async function runIngestPipeline(snapshot: PlanetSnapshot): Promise<Inges
       return cached;
     }
 
+    const startedAtMs = Date.now();
     const startedAt = new Date().toISOString();
     const raw = await fetchPlanet(snapshot);
     const checksumResult = verifyChecksum(raw, snapshot.expectedChecksum);
@@ -44,26 +45,18 @@ export async function runIngestPipeline(snapshot: PlanetSnapshot): Promise<Inges
       throw new IngestError(IngestErrorCode.PUBLISH_FAILED, `artifact publish failed: ${message}`);
     });
     const artifactVersion = `artifact-${snapshotId}-${published.etag.slice(0, 12)}`;
-    const version = {
-      id: artifactVersion,
-      key: published.key,
-      checksum: checksumResult.checksum,
-      byteSize: published.size,
-      createdAt: new Date().toISOString(),
-      validated: checksumResult.valid,
-    };
     const completedAt = new Date().toISOString();
-    const completed = new Date(completedAt).valueOf() - new Date(startedAt).valueOf();
+    const durationMs = Date.now() - startedAtMs;
     const report: IngestRunReport = {
       snapshotId,
       artifactId: artifactVersion,
       artifactKey: published.key,
       checksum: checksumResult.checksum,
       byteSize: published.size,
-      validated: version.validated,
+      validated: checksumResult.valid,
       startedAt,
       completedAt,
-      durationMs: completed,
+      durationMs,
       validationSummary: `sourceBytes=${raw.byteLength}; convertedBytes=${converted.bytes.byteLength}`,
     };
     // Ingestion side effects (artifact registration) are handled by control-plane orchestration.

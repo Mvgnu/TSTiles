@@ -311,6 +311,42 @@ function replaceStylePlaceholders(url: string, styleId: string): string {
     .replace("/v1/static/basic/", `/v1/static/${styleId}/`);
 }
 
+function cloneExamples(examples: ReadonlyArray<{ name: string; description: string; url: string }>): ExampleBundle["quickstart"] {
+  return examples.map((entry) => ({
+    name: entry.name,
+    description: entry.description,
+    url: entry.url,
+  }));
+}
+
+function cloneOpenApiDocument(document: OpenApiDocument): OpenApiDocument {
+  const clonedPaths: OpenApiDocument["paths"] = {};
+  for (const [path, methods] of Object.entries(document.paths)) {
+    const clonedMethods: OpenApiPathMethods = {};
+    if (methods.get) {
+      clonedMethods.get = { summary: methods.get.summary };
+    }
+    if (methods.head) {
+      clonedMethods.head = { summary: methods.head.summary };
+    }
+    if (methods.options) {
+      clonedMethods.options = { summary: methods.options.summary };
+    }
+    if (methods.post) {
+      clonedMethods.post = { summary: methods.post.summary };
+    }
+    clonedPaths[path] = clonedMethods;
+  }
+  return {
+    openapi: document.openapi,
+    info: {
+      title: document.info.title,
+      version: document.info.version,
+    },
+    paths: clonedPaths,
+  };
+}
+
 const quickstartExamples = {
   vector: [
     {
@@ -409,7 +445,7 @@ export function getDocsIndex(): DocsIndex {
 }
 
 export function getOpenApiJson(): OpenApiDocument {
-  return openApiDocument;
+  return cloneOpenApiDocument(openApiDocument);
 }
 
 export function getExamples(): ExampleBundle {
@@ -431,10 +467,10 @@ export function getExamples(): ExampleBundle {
     url: replaceStylePlaceholders(example.url, styleId),
   }));
   return {
-    quickstart: quickstartExamples.vector,
-    mapLibre: resolvedMapLibreExamples,
-    leaflet: resolvedLeafletExamples,
-    raster: resolvedRasterExamples,
-    staticMaps: resolvedStaticExamples,
+    quickstart: cloneExamples(quickstartExamples.vector),
+    mapLibre: cloneExamples(resolvedMapLibreExamples),
+    leaflet: cloneExamples(resolvedLeafletExamples),
+    raster: cloneExamples(resolvedRasterExamples),
+    staticMaps: cloneExamples(resolvedStaticExamples),
   };
 }

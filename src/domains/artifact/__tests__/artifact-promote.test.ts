@@ -15,6 +15,7 @@ const test: TestFunction = ((globalThis as { test?: TestFunction }).test ?? ((_,
 }));
 
 test("artifact registration, promotion, rollback, and retention", () => {
+const beforeRollbackIso = new Date().toISOString();
 function seed(versionId: string, checksum: string): void {
   registerArtifact({
     id: versionId,
@@ -57,6 +58,7 @@ try {
 
 const rollback = rollbackArtifact();
 assert.equal(rollback.versionId, "artifact-b");
+assert.equal(Date.parse(rollback.activeSince) >= Date.parse(beforeRollbackIso), true);
 
 const all = listArtifacts();
 assert.equal(all.length >= 2, true);

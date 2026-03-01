@@ -11,6 +11,7 @@ exports:
   - IngestRunReport
   - runIngestPipeline
   - emitIngestCompleted
+  - buildDefaultSnapshot
 consumes:
   - osm.planet_latest
   - storage.ObjectStore

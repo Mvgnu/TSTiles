@@ -3,6 +3,7 @@ import { docsIndexRoute } from "../routes/docs-index-route";
 import { docsOpenApiRoute } from "../routes/openapi-route";
 import { docsExamplesRoute } from "../routes/examples-route";
 import { createStyleVersion, publishStyleVersion } from "../../styles/styles.service";
+import { getExamples, getOpenApiJson } from "../docs-site.service";
 
 type TestFunction = (name: string, fn: () => void | Promise<void>) => void;
 const test: TestFunction = ((globalThis as { test?: TestFunction }).test ?? ((_, fn) => {
@@ -207,4 +208,18 @@ test("examples route resolves known styleId from published styles", async (): Pr
   assert.equal(examples.mapLibre.some((entry) => entry.url.includes("/v1/styles/docs-style/style.json")), true);
   assert.equal(examples.raster.some((entry) => entry.url.includes("/v1/raster/docs-style/")), true);
   assert.equal(examples.staticMaps.some((entry) => entry.url.includes("/v1/static/docs-style/")), true);
+});
+
+test("docs-site service returns defensive copies", (): void => {
+  const openApi = getOpenApiJson();
+  const originalSummary = openApi.paths["/docs"]?.get?.summary ?? "";
+  Reflect.set(openApi.paths["/docs"]?.get ?? {}, "summary", "mutated-summary");
+  const reloadedOpenApi = getOpenApiJson();
+  assert.equal(reloadedOpenApi.paths["/docs"]?.get?.summary, originalSummary);
+
+  const examples = getExamples();
+  const originalQuickstartName = examples.quickstart[0]?.name ?? "";
+  Reflect.set(examples.quickstart[0] ?? {}, "name", "mutated-example");
+  const reloadedExamples = getExamples();
+  assert.equal(reloadedExamples.quickstart[0]?.name, originalQuickstartName);
 });

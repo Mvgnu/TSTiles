@@ -6,6 +6,10 @@ export function rollback(history: ActiveArtifactPointer[], activeRef: { value: A
   if (!previous) {
     throw new ArtifactError(ArtifactErrorCode.ROLLBACK_UNAVAILABLE, "No prior artifact in history");
   }
-  activeRef.value = previous;
-  return previous;
+  const pointer: ActiveArtifactPointer = {
+    versionId: previous.versionId,
+    activeSince: new Date().toISOString(),
+  };
+  activeRef.value = pointer;
+  return pointer;
 }

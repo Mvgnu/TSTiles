@@ -17,21 +17,30 @@ function assertNonEmpty(value: string, field: string): string {
   return normalized;
 }
 
+function errorDetails(message: string): string {
+  const separator = message.indexOf(":");
+  if (separator < 0 || separator === message.length - 1) {
+    return message;
+  }
+  return message.slice(separator + 1).trim();
+}
+
 function mapStyleError(error: unknown): never {
   if (error instanceof StudioError) {
     throw error;
   }
   if (error instanceof StyleError) {
+    const details = errorDetails(error.message);
     if (error.code === StyleErrorCode.NOT_FOUND || error.code === StyleErrorCode.VERSION_NOT_FOUND) {
-      throw new StudioError(StudioErrorCode.NOT_FOUND, error.message);
+      throw new StudioError(StudioErrorCode.NOT_FOUND, details);
     }
     if (error.code === StyleErrorCode.PUBLISH_CONFLICT) {
-      throw new StudioError(StudioErrorCode.CONFLICT, error.message);
+      throw new StudioError(StudioErrorCode.CONFLICT, details);
     }
     if (error.code === StyleErrorCode.BAD_REQUEST || error.code === StyleErrorCode.INVALID_DOCUMENT) {
-      throw new StudioError(StudioErrorCode.BAD_REQUEST, error.message);
+      throw new StudioError(StudioErrorCode.BAD_REQUEST, details);
     }
-    throw new StudioError(StudioErrorCode.DEPENDENCY_FAILED, error.message);
+    throw new StudioError(StudioErrorCode.DEPENDENCY_FAILED, details);
   }
   if (error instanceof Error) {
     throw new StudioError(StudioErrorCode.DEPENDENCY_FAILED, error.message);
