@@ -1,4 +1,4 @@
-import type { CacheHealthSignal } from "../types";
+import { ObservabilityError, ObservabilityErrorCode, type CacheHealthSignal } from "../types";
 
 export interface AlertDispatchResult {
   readonly sent: boolean;
@@ -10,7 +10,10 @@ export function dispatchAlert(signal: CacheHealthSignal, active: boolean): Alert
     return { sent: false, reason: "observability disabled" };
   }
   if (process.env.OBS_ALERT_FORCE_FAIL === "true") {
-    throw new Error("OBS_ALERT_DISPATCH_FAILED");
+    throw new ObservabilityError(
+      ObservabilityErrorCode.ALERT_DISPATCH_FAILED,
+      "Failed to dispatch observability alert",
+    );
   }
   if (signal.status === "critical" || signal.status === "warn") {
     return { sent: true, reason: `status=${signal.status}` };

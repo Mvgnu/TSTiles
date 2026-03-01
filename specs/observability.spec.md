@@ -51,6 +51,7 @@ Owns cache ratio monitoring, origin egress tracking, and operational alerts for 
 
 - `OBS_SIGNAL_SCHEMA_INVALID`
 - `OBS_SLO_THRESHOLD_MISCONFIGURED`
+- `OBS_ALERT_DISPATCH_FAILED`
 
 ## Caching Semantics
 
