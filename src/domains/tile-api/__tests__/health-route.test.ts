@@ -70,4 +70,14 @@ test("health endpoint returns service status without auth", async (): Promise<vo
   });
   assert.equal(healthBadPath.status, 404);
   assert.equal(healthBadPath.headers["cache-control"], "no-store");
+  assert.equal(healthBadPath.body instanceof Uint8Array, true);
+
+  const healthBadPathHead = await handleHealthRequest({
+    method: "HEAD",
+    path: "/health/status",
+    headers: {},
+  });
+  assert.equal(healthBadPathHead.status, 404);
+  assert.equal(healthBadPathHead.headers["cache-control"], "no-store");
+  assert.equal(healthBadPathHead.body, undefined);
 });

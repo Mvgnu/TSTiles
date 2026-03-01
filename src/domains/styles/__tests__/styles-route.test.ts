@@ -158,6 +158,15 @@ test("style routes expose list, JSON, sprites, and glyph placeholders", async ()
   });
   assert.equal(missing.status, 404);
   assert.equal(missing.headers["cache-control"], "no-store");
+  assert.equal(typeof missing.body, "string");
+
+  const missingHead = await handleStyleRequest({
+    method: "HEAD",
+    path: "/v1/styles/missing/style.json",
+  });
+  assert.equal(missingHead.status, 404);
+  assert.equal(missingHead.headers["cache-control"], "no-store");
+  assert.equal(missingHead.body, undefined);
 
   const blankStyleId = await handleStyleRequest({
     method: "GET",
@@ -198,6 +207,15 @@ test("style routes expose list, JSON, sprites, and glyph placeholders", async ()
   });
   assert.equal(unknown.status, 400);
   assert.equal(unknown.headers["cache-control"], "no-store");
+  assert.equal(typeof unknown.body, "string");
+
+  const unknownHead = await handleStyleRequest({
+    method: "HEAD",
+    path: "/v1/styles/style-route/unknown",
+  });
+  assert.equal(unknownHead.status, 400);
+  assert.equal(unknownHead.headers["cache-control"], "no-store");
+  assert.equal(unknownHead.body, undefined);
 
   const invalidOptions = await handleStyleRequest({
     method: "OPTIONS",

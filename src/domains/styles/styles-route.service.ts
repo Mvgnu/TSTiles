@@ -123,6 +123,13 @@ function encodeJsonError(code: string): string {
   return JSON.stringify({ error: code });
 }
 
+function bodyForMethod(method: HttpMethod, body: string): string | undefined {
+  if (method === "HEAD") {
+    return undefined;
+  }
+  return body;
+}
+
 function byteLengthUtf8(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
@@ -143,7 +150,7 @@ export async function handleStyleRequest(input: StyleRequest): Promise<StyleResp
     if (method !== "GET" && method !== "HEAD") {
       return {
         status: 400,
-        body: encodeJsonError("STYLE_BAD_REQUEST"),
+        body: bodyForMethod(method, encodeJsonError("STYLE_BAD_REQUEST")),
         headers: {
           ...buildCorsHeaders(),
           "content-type": "application/json",
@@ -233,7 +240,7 @@ export async function handleStyleRequest(input: StyleRequest): Promise<StyleResp
     ) {
       return {
         status: 404,
-        body: encodeJsonError("STYLE_NOT_FOUND"),
+        body: bodyForMethod(method, encodeJsonError("STYLE_NOT_FOUND")),
         headers: {
           ...buildCorsHeaders(),
           "content-type": "application/json",
@@ -247,7 +254,7 @@ export async function handleStyleRequest(input: StyleRequest): Promise<StyleResp
     ) {
       return {
         status: 400,
-        body: encodeJsonError("STYLE_BAD_REQUEST"),
+        body: bodyForMethod(method, encodeJsonError("STYLE_BAD_REQUEST")),
         headers: {
           ...buildCorsHeaders(),
           "content-type": "application/json",
@@ -258,7 +265,7 @@ export async function handleStyleRequest(input: StyleRequest): Promise<StyleResp
   }
   return {
     status: 500,
-    body: encodeJsonError("STYLE_ROUTE_FAILED"),
+    body: bodyForMethod(method, encodeJsonError("STYLE_ROUTE_FAILED")),
     headers: {
       ...buildCorsHeaders(),
       "content-type": "application/json",

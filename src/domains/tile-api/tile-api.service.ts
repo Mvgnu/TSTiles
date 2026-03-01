@@ -456,14 +456,14 @@ export async function handleHealthRequest(input: TileRequest): Promise<TileRespo
       if (error.code === TileApiErrorCode.HEALTH_NOT_FOUND) {
         return {
           status: 404,
-          body: encodeJsonError(TileApiErrorCode.HEALTH_NOT_FOUND),
+          body: responseBodyForMethod(input.method, encodeJsonError(TileApiErrorCode.HEALTH_NOT_FOUND)),
           headers: errorHeaders,
         };
       }
       if (error.code === TileApiErrorCode.HEALTH_BAD_REQUEST) {
         return {
           status: 400,
-          body: encodeJsonError(TileApiErrorCode.HEALTH_BAD_REQUEST),
+          body: responseBodyForMethod(input.method, encodeJsonError(TileApiErrorCode.HEALTH_BAD_REQUEST)),
           headers: errorHeaders,
         };
       }
@@ -477,7 +477,7 @@ export async function handleHealthRequest(input: TileRequest): Promise<TileRespo
     }
     return {
       status: 500,
-      body: encodeJsonError(TileApiErrorCode.HEALTH_UNAVAILABLE),
+      body: responseBodyForMethod(input.method, encodeJsonError(TileApiErrorCode.HEALTH_UNAVAILABLE)),
       headers: errorHeaders,
     };
   }
