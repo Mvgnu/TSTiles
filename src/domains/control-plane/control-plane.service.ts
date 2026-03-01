@@ -310,7 +310,6 @@ function summarizeArtifactList(artifacts: ReturnType<typeof listArtifacts>): Art
 }
 
 export async function triggerIngest(actorToken?: string): Promise<JobMetadata> {
-  loadConfig();
   const actor = assertAdmin(actorToken);
   const id = nextJobId();
   const snapshot = buildDefaultSnapshot();
@@ -575,13 +574,13 @@ export function publishStyleVersionEndpoint(styleId: string, versionId: string, 
 
 export function healthStatusEndpoint(actorToken?: string): HealthStatus {
   assertAdmin(actorToken);
-  loadConfig();
+  const config = loadConfig();
   const now = Date.now();
   const recentAudit = auditLog.filter((event) => now - Date.parse(event.startedAt) < 1000 * 60 * 5).length;
   return {
     ok: true,
     storageReachable: true,
-    configVersion: "v1",
+    configVersion: `${config.environment}-${config.storage.mode}`,
     auditEventsInWindow: recentAudit,
   };
 }

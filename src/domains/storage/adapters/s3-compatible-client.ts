@@ -6,14 +6,21 @@ interface StoredObject {
   readonly metadata: Omit<ObjectMetadata, "etag">;
 }
 
+class MissingObjectError extends Error {
+  public readonly code = "ENOENT";
+
+  public constructor(key: string) {
+    super(`not found: ${key}`);
+    this.name = "MissingObjectError";
+  }
+}
+
 const etagFromBytes = (bytes: Uint8Array): string => {
   return createHash("sha256").update(bytes).digest("hex");
 };
 
-function buildMissingObjectError(key: string): Error & { code: string } {
-  const error = new Error(`not found: ${key}`) as Error & { code: string };
-  error.code = "ENOENT";
-  return error;
+function buildMissingObjectError(key: string): MissingObjectError {
+  return new MissingObjectError(key);
 }
 
 export class InMemoryObjectStoreClient {

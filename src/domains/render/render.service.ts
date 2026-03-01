@@ -160,12 +160,12 @@ function isRenderError(value: unknown): value is RenderError {
 }
 
 function messageCode(value: unknown): string | undefined {
-  if (!(value instanceof Error)) {
+  if (!(value instanceof Error) || typeof value !== "object" || value === null) {
     return undefined;
   }
-  const withCode = value as Error & { code?: unknown };
-  if (typeof withCode.code === "string" && withCode.code.length > 0) {
-    return withCode.code;
+  const maybeCode = Reflect.get(value, "code");
+  if (typeof maybeCode === "string" && maybeCode.length > 0) {
+    return maybeCode;
   }
   return undefined;
 }

@@ -38,6 +38,28 @@ function isTemplateWithoutRawToken(value: string): boolean {
   return !hasRawToken && (!hasCredentialQuery || value.includes("{access_token}"));
 }
 
+function splitTileTemplateUrl(url: string): { readonly templatePath: string; readonly search: string } {
+  const isAbsoluteUrl = url.startsWith("http://") || url.startsWith("https://");
+  if (isAbsoluteUrl) {
+    const parsed = new URL(url);
+    return {
+      templatePath: parsed.pathname,
+      search: parsed.search,
+    };
+  }
+  const separator = url.indexOf("?");
+  if (separator < 0) {
+    return {
+      templatePath: url,
+      search: "",
+    };
+  }
+  return {
+    templatePath: url.slice(0, separator),
+    search: url.slice(separator),
+  };
+}
+
 function validateSourceTileUrl(label: string, url: unknown): void {
   if (!isString(url)) {
     throw buildError(StyleErrorCode.INVALID_DOCUMENT, `${label} tile source must be a URL template`);
@@ -45,14 +67,7 @@ function validateSourceTileUrl(label: string, url: unknown): void {
   if (!isTemplateWithoutRawToken(url)) {
     throw buildError(StyleErrorCode.INVALID_DOCUMENT, `${label} tile source must not expose raw credentials`);
   }
-  const isAbsoluteUrl = url.startsWith("http://") || url.startsWith("https://");
-  const [templatePath, rawSearch] = isAbsoluteUrl
-    ? (() => {
-      const parsed = new URL(url);
-      return [parsed.pathname, parsed.search];
-    })()
-    : url.split("?");
-  const search = rawSearch === undefined ? "" : `?${rawSearch}`;
+  const { templatePath, search } = splitTileTemplateUrl(url);
   const fullPath = `${templatePath}${search}`;
   if (!TEMPLATED_TILE_PATH.test(fullPath)) {
     throw buildError(StyleErrorCode.INVALID_DOCUMENT, `${label} tile source must use the service tile template`);
@@ -66,13 +81,11 @@ function validateSourceSourceObject(source: unknown, sourceName: string): void {
   if (sourceName.trim() === "") {
     return;
   }
-  if (typeof source !== "object" || source === null) {
+  if (!isRecord(source)) {
     throw buildError(StyleErrorCode.INVALID_DOCUMENT, `style source ${sourceName} must be an object`);
   }
-
-  const sourceRecord = source as Record<string, unknown>;
-  const sourceUrl = sourceRecord.url;
-  const sourceTiles = sourceRecord.tiles;
+  const sourceUrl = source.url;
+  const sourceTiles = source.tiles;
 
   if (sourceUrl !== undefined) {
     validateSourceTileUrl(`source ${sourceName}`, sourceUrl);

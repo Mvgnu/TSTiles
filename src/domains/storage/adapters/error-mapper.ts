@@ -1,9 +1,12 @@
 import { StorageError, StorageErrorCode } from "../types";
 
-function extractErrorCode(error: Error): string | undefined {
-  const withCode = error as Error & { code?: unknown };
-  if (typeof withCode.code === "string" && withCode.code.length > 0) {
-    return withCode.code.toUpperCase();
+function extractErrorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) {
+    return undefined;
+  }
+  const maybeCode = Reflect.get(error, "code");
+  if (typeof maybeCode === "string" && maybeCode.length > 0) {
+    return maybeCode.toUpperCase();
   }
   return undefined;
 }

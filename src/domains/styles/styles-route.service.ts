@@ -1,4 +1,3 @@
-import { loadConfig } from "../../config/load-config";
 import {
   getStyle,
   listStyles,
@@ -129,7 +128,6 @@ function byteLengthUtf8(value: string): number {
 }
 
 export async function handleStyleRequest(input: StyleRequest): Promise<StyleResponse> {
-  loadConfig();
   const method = input.method;
   try {
     if (method === "OPTIONS") {
