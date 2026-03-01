@@ -8,7 +8,19 @@ import { StorageError, StorageErrorCode } from "../storage/types";
 import { validateTileCoordinates as validateTileCoordinatesInternal } from "./pmtiles/coordinates";
 import { resolveTileByteRange } from "./pmtiles/directory-resolver";
 import { readTileRange } from "./pmtiles/range-reader";
-import type { ResolveMetadataInput, ResolveVectorTileInput, ResolvedMetadata, ResolvedTile, TileCoordinates } from "./types";
+import {
+  ResolverError,
+  ResolverErrorCode,
+  type ResolveMetadataInput,
+  type ResolveVectorTileInput,
+  type ResolvedMetadata,
+  type ResolvedTile,
+  type TileCoordinates,
+} from "./types";
+
+function throwResolverError(code: ResolverErrorCode, details?: string): never {
+  throw new ResolverError(code, details);
+}
 
 function resolveArtifactRecord(artifactId?: string): ArtifactVersion {
   const artifacts = listArtifacts();
@@ -20,44 +32,41 @@ function resolveArtifactRecord(artifactId?: string): ArtifactVersion {
     try {
       targetId = getActiveArtifact().versionId;
     } catch {
-      throw new Error("RESOLVER_ARTIFACT_UNAVAILABLE");
+      throwResolverError(ResolverErrorCode.ARTIFACT_UNAVAILABLE);
     }
   }
   const artifact = artifacts.find((entry) => entry.id === targetId);
   if (!artifact) {
-    throw new Error("RESOLVER_ARTIFACT_UNAVAILABLE");
+    throwResolverError(ResolverErrorCode.ARTIFACT_UNAVAILABLE);
   }
   return artifact;
 }
 
 function mapResolverFailure(error: unknown): never {
-  if (error instanceof Error && error.message.startsWith("RESOLVER_")) {
-    throw error;
-  }
-  if (error instanceof Error && error.message === "RESOLVER_BAD_COORDINATES") {
+  if (error instanceof ResolverError) {
     throw error;
   }
   if (error instanceof ArtifactError) {
-    throw new Error("RESOLVER_ARTIFACT_UNAVAILABLE");
+    throwResolverError(ResolverErrorCode.ARTIFACT_UNAVAILABLE);
   }
   if (error instanceof ContractError && error.code === ContractErrorCode.SCHEMA_INVALID) {
-    throw new Error("RESOLVER_BAD_COORDINATES");
+    throwResolverError(ResolverErrorCode.BAD_COORDINATES);
   }
   if (error instanceof StorageError) {
     if (error.code === StorageErrorCode.NOT_FOUND) {
-      throw new Error("RESOLVER_TILE_NOT_FOUND");
+      throwResolverError(ResolverErrorCode.TILE_NOT_FOUND);
     }
     if (error.code === StorageErrorCode.RANGE_INVALID) {
-      throw new Error("RESOLVER_BAD_COORDINATES");
+      throwResolverError(ResolverErrorCode.BAD_COORDINATES);
     }
     if (error.code === StorageErrorCode.PRECONDITION_FAILED) {
-      throw new Error("RESOLVER_ARTIFACT_UNAVAILABLE");
+      throwResolverError(ResolverErrorCode.ARTIFACT_UNAVAILABLE);
     }
     if (error.code === StorageErrorCode.TIMEOUT) {
-      throw new Error("RESOLVER_ORIGIN_READ_FAILED");
+      throwResolverError(ResolverErrorCode.ORIGIN_READ_FAILED);
     }
   }
-  throw new Error("RESOLVER_ORIGIN_READ_FAILED");
+  throwResolverError(ResolverErrorCode.ORIGIN_READ_FAILED);
 }
 
 function toTileCoordinates(input: ResolveVectorTileInput): TileCoordinates {
@@ -69,7 +78,7 @@ function toTileCoordinates(input: ResolveVectorTileInput): TileCoordinates {
   const validation = validateTileCoordinatesInternal(coordinates);
   if (validation) {
     if (validation.code !== ContractErrorCode.SCHEMA_INVALID) {
-      throw new Error("RESOLVER_BAD_COORDINATES");
+      throwResolverError(ResolverErrorCode.BAD_COORDINATES);
     }
     throw validation;
   }

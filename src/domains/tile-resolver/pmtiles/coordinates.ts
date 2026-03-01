@@ -1,5 +1,6 @@
 import { isTileCoordinates } from "../../../contracts/contracts";
 import { ContractError, ContractErrorCode } from "../../../contracts/types";
+import { ResolverError, ResolverErrorCode } from "../types";
 
 const tileCoordinatePathPattern = /^\/?tiles\/(\d+)\/(\d+)\/(\d+)\.mvt$/;
 const MAX_ZOOM = 30;
@@ -13,7 +14,7 @@ export interface ParsedTilePath {
 export function parseTilePath(path: string): ParsedTilePath {
   const match = tileCoordinatePathPattern.exec(path);
   if (!match || match.length !== 4) {
-    throw new Error("RESOLVER_BAD_COORDINATES");
+    throw new ResolverError(ResolverErrorCode.BAD_COORDINATES);
   }
   const parsed: ParsedTilePath = {
     z: Number(match[1]),
@@ -22,7 +23,7 @@ export function parseTilePath(path: string): ParsedTilePath {
   };
   const validation = validateTileCoordinates(parsed);
   if (validation !== null) {
-    throw new Error("RESOLVER_BAD_COORDINATES");
+    throw new ResolverError(ResolverErrorCode.BAD_COORDINATES);
   }
   return parsed;
 }

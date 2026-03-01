@@ -10,6 +10,8 @@ exports:
   - TileRequest
   - TileResponse
   - TileMetadataResponse
+  - TileApiError
+  - TileApiErrorCode
   - handleTileRequest
   - handleMetadataRequest
   - handleHealthRequest
@@ -17,6 +19,7 @@ consumes:
   - access.authorizeTileRequest
   - tile_resolver.resolveVectorTile
   - tile_resolver.resolveMetadata
+  - tile_resolver.ResolverErrorCode
   - config.TileDeliveryPolicy
   - contracts.AuthorizeContext
 verification:

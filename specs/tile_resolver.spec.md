@@ -9,6 +9,8 @@ paths:
 exports:
   - TileCoordinates
   - ResolvedTile
+  - ResolverError
+  - ResolverErrorCode
   - resolveVectorTile
   - resolveMetadata
   - validateTileCoordinates

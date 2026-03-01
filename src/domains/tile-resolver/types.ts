@@ -1,6 +1,23 @@
 import type { ArtifactVersion } from "../artifact/types";
 import type { ContractError } from "../../contracts/types";
 
+export const enum ResolverErrorCode {
+  BAD_COORDINATES = "RESOLVER_BAD_COORDINATES",
+  TILE_NOT_FOUND = "RESOLVER_TILE_NOT_FOUND",
+  ARTIFACT_UNAVAILABLE = "RESOLVER_ARTIFACT_UNAVAILABLE",
+  ORIGIN_READ_FAILED = "RESOLVER_ORIGIN_READ_FAILED",
+}
+
+export class ResolverError extends Error {
+  public readonly code: ResolverErrorCode;
+
+  public constructor(code: ResolverErrorCode, details?: string) {
+    super(details ? `${code}:${details}` : code);
+    this.code = code;
+    this.name = "ResolverError";
+  }
+}
+
 export type TileCoordinates = {
   readonly z: number;
   readonly x: number;

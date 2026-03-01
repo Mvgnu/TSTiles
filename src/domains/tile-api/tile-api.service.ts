@@ -1,12 +1,17 @@
 import { authorizeTileRequest, buildCorsHeaders } from "../access/access.service";
-import type { TileRequest, TileResponse, TileMetadataResponse } from "./types";
+import {
+  TileApiError,
+  TileApiErrorCode,
+  type TileRequest,
+  type TileResponse,
+  type TileMetadataResponse,
+} from "./types";
 import type { AuthorizeContext, HttpMethod } from "../../contracts/types";
-import { ArtifactError } from "../artifact/types";
 import { resolveMetadata, resolveVectorTile } from "../tile-resolver/tile-resolver.service";
+import { ResolverError, ResolverErrorCode } from "../tile-resolver/types";
 import { buildTileCacheKey } from "./components/cache-key";
 import { buildTileHeaders } from "./components/response-headers";
 import { loadConfig } from "../../config/load-config";
-import { StorageError, StorageErrorCode } from "../storage/types";
 import { normalizeHeaderMap } from "../../contracts/contracts";
 
 const tilePathRegex = /^\/tiles\/(\d+)\/(\d+)\/(\d+)\.mvt$/;
@@ -17,6 +22,10 @@ interface HealthPayload {
   readonly status: "ok";
   readonly service: string;
   readonly timestamp: string;
+}
+
+function throwTileApiError(code: TileApiErrorCode): never {
+  throw new TileApiError(code);
 }
 
 function encodeJsonError(error: string): Uint8Array {
@@ -61,18 +70,18 @@ function buildPreflightHeaders(origin?: string): Record<string, string> {
 function parseTilePath(path: string): { z: number; x: number; y: number } {
   const match = tilePathRegex.exec(path);
   if (!match || match.length !== 4) {
-    throw new Error("TILE_BAD_COORDINATES");
+    throwTileApiError(TileApiErrorCode.BAD_COORDINATES);
   }
   const z = Number(match[1]);
   const x = Number(match[2]);
   const y = Number(match[3]);
   const maxZoom = 30;
   if (z > maxZoom) {
-    throw new Error("TILE_BAD_COORDINATES");
+    throwTileApiError(TileApiErrorCode.BAD_COORDINATES);
   }
   const axisLimit = 2 ** z;
   if (x >= axisLimit || y >= axisLimit) {
-    throw new Error("TILE_BAD_COORDINATES");
+    throwTileApiError(TileApiErrorCode.BAD_COORDINATES);
   }
   return { z, x, y };
 }
@@ -91,7 +100,7 @@ function pickAccessToken(query: TileRequest["query"]): string | undefined {
 
 function assertHeadEnabled(method: HttpMethod, headEnabled: boolean): void {
   if (method === "HEAD" && !headEnabled) {
-    throw new Error("HEAD_DISABLED");
+    throwTileApiError(TileApiErrorCode.HEAD_DISABLED);
   }
 }
 
@@ -99,9 +108,89 @@ function byteLengthUtf8(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
 
+function mapTileResolverError(error: ResolverError, headers: Record<string, string>): TileResponse {
+  if (error.code === ResolverErrorCode.BAD_COORDINATES) {
+    return {
+      status: 400,
+      body: encodeJsonError(TileApiErrorCode.BAD_COORDINATES),
+      headers,
+    };
+  }
+  if (error.code === ResolverErrorCode.TILE_NOT_FOUND) {
+    return {
+      status: 404,
+      body: encodeJsonError(TileApiErrorCode.NOT_FOUND),
+      headers,
+    };
+  }
+  if (error.code === ResolverErrorCode.ARTIFACT_UNAVAILABLE) {
+    return {
+      status: 409,
+      body: encodeJsonError(TileApiErrorCode.ARTIFACT_UNAVAILABLE),
+      headers,
+    };
+  }
+  return {
+    status: 502,
+    body: encodeJsonError(TileApiErrorCode.ORIGIN_READ_FAILED),
+    headers,
+  };
+}
+
+function mapTileApiError(error: TileApiError, headers: Record<string, string>): TileResponse {
+  if (error.code === TileApiErrorCode.HEAD_DISABLED) {
+    return {
+      status: 405,
+      body: undefined,
+      headers,
+    };
+  }
+  if (error.code === TileApiErrorCode.BAD_COORDINATES) {
+    return {
+      status: 400,
+      body: encodeJsonError(TileApiErrorCode.BAD_COORDINATES),
+      headers,
+    };
+  }
+  if (error.code === TileApiErrorCode.ARTIFACT_UNAVAILABLE) {
+    return {
+      status: 409,
+      body: encodeJsonError(TileApiErrorCode.ARTIFACT_UNAVAILABLE),
+      headers,
+    };
+  }
+  return {
+    status: 500,
+    body: encodeJsonError(TileApiErrorCode.ORIGIN_READ_FAILED),
+    headers,
+  };
+}
+
+function mapMetadataResolverError(error: ResolverError, headers: Record<string, string>): TileMetadataResponse {
+  if (error.code === ResolverErrorCode.ARTIFACT_UNAVAILABLE) {
+    return {
+      status: 409,
+      body: JSON.stringify({ error: TileApiErrorCode.ARTIFACT_UNAVAILABLE }),
+      headers,
+    };
+  }
+  if (error.code === ResolverErrorCode.TILE_NOT_FOUND) {
+    return {
+      status: 404,
+      body: JSON.stringify({ error: TileApiErrorCode.NOT_FOUND }),
+      headers,
+    };
+  }
+  return {
+    status: 503,
+    body: JSON.stringify({ error: TileApiErrorCode.ORIGIN_READ_FAILED }),
+    headers,
+  };
+}
+
 export async function handleTileRequest(input: TileRequest): Promise<TileResponse> {
   const path = normalizePath(input.path);
-  const headers = normalizeHeaderMap(input.headers as Record<string, string | undefined>);
+  const headers = normalizeHeaderMap(input.headers);
   const origin = resolveOrigin(headers);
   const errorHeaders = {
     ...buildPreflightHeaders(origin),
@@ -123,7 +212,7 @@ export async function handleTileRequest(input: TileRequest): Promise<TileRespons
       } catch {
         return {
           status: 400,
-          body: encodeJsonError("TILE_BAD_COORDINATES"),
+          body: encodeJsonError(TileApiErrorCode.BAD_COORDINATES),
           headers: errorHeaders,
         };
       }
@@ -175,117 +264,15 @@ export async function handleTileRequest(input: TileRequest): Promise<TileRespons
       },
     };
   } catch (error) {
-    if (error instanceof ArtifactError) {
-      if (error.code === "ARTIFACT_NOT_FOUND") {
-        return {
-          status: 404,
-          body: encodeJsonError("TILE_NOT_FOUND"),
-          headers: errorHeaders,
-        };
-      }
-      if (error.code === "ARTIFACT_NOT_VALIDATED") {
-        return {
-          status: 409,
-          body: encodeJsonError("TILE_ARTIFACT_UNAVAILABLE"),
-          headers: errorHeaders,
-        };
-      }
+    if (error instanceof ResolverError) {
+      return mapTileResolverError(error, errorHeaders);
     }
-    const message = (error as Error).message;
-    if (message === "TILE_BAD_COORDINATES") {
-      return {
-        status: 400,
-        body: encodeJsonError(message),
-        headers: errorHeaders,
-      };
-    }
-    if (message === "TILE_ARTIFACT_UNAVAILABLE") {
-      return {
-        status: 409,
-        body: encodeJsonError(message),
-        headers: errorHeaders,
-      };
-    }
-    if (error instanceof StorageError && error.code === StorageErrorCode.NOT_FOUND) {
-      return {
-        status: 404,
-        body: encodeJsonError("TILE_NOT_FOUND"),
-        headers: errorHeaders,
-      };
-    }
-    if (error instanceof StorageError && error.code === StorageErrorCode.RANGE_INVALID) {
-      return {
-        status: 416,
-        body: encodeJsonError(message),
-        headers: errorHeaders,
-      };
-    }
-    if (error instanceof StorageError && error.code === StorageErrorCode.PRECONDITION_FAILED) {
-      return {
-        status: 409,
-        body: encodeJsonError("TILE_ARTIFACT_UNAVAILABLE"),
-        headers: errorHeaders,
-      };
-    }
-    if (error instanceof StorageError && error.code === StorageErrorCode.TIMEOUT) {
-      return {
-        status: 503,
-        body: encodeJsonError("TILE_ORIGIN_READ_FAILED"),
-        headers: errorHeaders,
-      };
-    }
-    if (error instanceof StorageError) {
-      return {
-        status: 502,
-        body: encodeJsonError("TILE_ORIGIN_READ_FAILED"),
-        headers: errorHeaders,
-      };
-    }
-    if (message === "RESOLVER_BAD_COORDINATES") {
-      return {
-        status: 400,
-        body: encodeJsonError("TILE_BAD_COORDINATES"),
-        headers: errorHeaders,
-      };
-    }
-    if (message === "RESOLVER_TILE_NOT_FOUND") {
-      return {
-        status: 404,
-        body: encodeJsonError("TILE_NOT_FOUND"),
-        headers: errorHeaders,
-      };
-    }
-    if (message === "RESOLVER_ARTIFACT_UNAVAILABLE") {
-      return {
-        status: 409,
-        body: encodeJsonError("TILE_ARTIFACT_UNAVAILABLE"),
-        headers: errorHeaders,
-      };
-    }
-    if (message === "RESOLVER_ORIGIN_READ_FAILED") {
-      return {
-        status: 502,
-        body: encodeJsonError("TILE_ORIGIN_READ_FAILED"),
-        headers: errorHeaders,
-      };
-    }
-    if (message === "HEAD_DISABLED") {
-      return {
-        status: 405,
-        body: undefined,
-        headers: errorHeaders,
-      };
-    }
-    if (message === "TILE_NOT_FOUND") {
-      return {
-        status: 404,
-        body: encodeJsonError(message),
-        headers: errorHeaders,
-      };
+    if (error instanceof TileApiError) {
+      return mapTileApiError(error, errorHeaders);
     }
     return {
       status: 500,
-      body: encodeJsonError("TILE_ORIGIN_READ_FAILED"),
+      body: encodeJsonError(TileApiErrorCode.ORIGIN_READ_FAILED),
       headers: errorHeaders,
     };
   }
@@ -293,7 +280,7 @@ export async function handleTileRequest(input: TileRequest): Promise<TileRespons
 
 export async function handleMetadataRequest(input: TileRequest): Promise<TileMetadataResponse> {
   const path = normalizePath(input.path);
-  const headers = normalizeHeaderMap(input.headers as Record<string, string | undefined>);
+  const headers = normalizeHeaderMap(input.headers);
   const origin = resolveOrigin(headers);
   const errorHeaders = {
     ...buildPreflightHeaders(origin),
@@ -306,7 +293,7 @@ export async function handleMetadataRequest(input: TileRequest): Promise<TileMet
       if (normalizedPath !== metadataPath) {
         return {
           status: 400,
-          body: JSON.stringify({ error: "TILE_BAD_COORDINATES" }),
+          body: JSON.stringify({ error: TileApiErrorCode.BAD_COORDINATES }),
           headers: errorHeaders,
         };
       }
@@ -319,13 +306,7 @@ export async function handleMetadataRequest(input: TileRequest): Promise<TileMet
       };
     }
     const config = loadConfig();
-    if (input.method === "HEAD" && !config.tileDeliveryPolicy.headEnabled) {
-      return {
-        status: 405,
-        body: undefined,
-        headers: errorHeaders,
-      };
-    }
+    assertHeadEnabled(input.method, config.tileDeliveryPolicy.headEnabled);
     const auth = authorizeTileRequest({
       method: input.method,
       path: normalizedPath,
@@ -347,7 +328,7 @@ export async function handleMetadataRequest(input: TileRequest): Promise<TileMet
     if (normalizedPath !== metadataPath) {
       return {
         status: 404,
-        body: JSON.stringify({ error: "TILE_NOT_FOUND" }),
+        body: JSON.stringify({ error: TileApiErrorCode.NOT_FOUND }),
         headers: {
           ...cors,
           "content-type": "application/json",
@@ -385,54 +366,21 @@ export async function handleMetadataRequest(input: TileRequest): Promise<TileMet
       },
     };
   } catch (error) {
-    if (error instanceof ArtifactError) {
-      if (error.code === "ARTIFACT_NOT_FOUND") {
+    if (error instanceof ResolverError) {
+      return mapMetadataResolverError(error, errorHeaders);
+    }
+    if (error instanceof TileApiError) {
+      if (error.code === TileApiErrorCode.HEAD_DISABLED) {
         return {
-          status: 404,
-          body: JSON.stringify({ error: "TILE_NOT_FOUND" }),
+          status: 405,
+          body: undefined,
           headers: errorHeaders,
         };
       }
-      if (error.code === "ARTIFACT_NOT_VALIDATED") {
-        return {
-          status: 409,
-          body: JSON.stringify({ error: "TILE_ARTIFACT_UNAVAILABLE" }),
-          headers: errorHeaders,
-        };
-      }
-    }
-    if (error instanceof StorageError && error.code === StorageErrorCode.NOT_FOUND) {
-      return {
-        status: 404,
-        body: JSON.stringify({ error: "TILE_NOT_FOUND" }),
-        headers: errorHeaders,
-      };
-    }
-    if (error instanceof StorageError && error.code === StorageErrorCode.RANGE_INVALID) {
-      return {
-        status: 416,
-        body: JSON.stringify({ error: error.message }),
-        headers: errorHeaders,
-      };
-    }
-    if (error instanceof StorageError) {
-      return {
-        status: 503,
-        body: JSON.stringify({ error: "TILE_ORIGIN_READ_FAILED" }),
-        headers: errorHeaders,
-      };
-    }
-    const message = (error as Error).message;
-    if (message === "RESOLVER_ARTIFACT_UNAVAILABLE") {
-      return {
-        status: 409,
-        body: JSON.stringify({ error: "TILE_ARTIFACT_UNAVAILABLE" }),
-        headers: errorHeaders,
-      };
     }
     return {
       status: 503,
-      body: JSON.stringify({ error: "TILE_ORIGIN_READ_FAILED" }),
+      body: JSON.stringify({ error: TileApiErrorCode.ORIGIN_READ_FAILED }),
       headers: errorHeaders,
     };
   }
@@ -440,39 +388,20 @@ export async function handleMetadataRequest(input: TileRequest): Promise<TileMet
 
 export async function handleHealthRequest(input: TileRequest): Promise<TileResponse> {
   const path = normalizePath(input.path);
+  const errorHeaders = {
+    "content-type": "application/json",
+    "cache-control": "no-store",
+  };
   try {
     const normalizedPath = stripV1Prefix(path);
     if (normalizedPath !== healthPath && normalizedPath !== `${healthPath}/`) {
-      return {
-        status: 404,
-        body: encodeJsonError("HEALTH_NOT_FOUND"),
-        headers: {
-          "content-type": "application/json",
-          "cache-control": "no-store",
-        },
-      };
+      throwTileApiError(TileApiErrorCode.HEALTH_NOT_FOUND);
     }
     if (input.method !== "GET" && input.method !== "HEAD") {
-      return {
-        status: 400,
-        body: encodeJsonError("HEALTH_BAD_REQUEST"),
-        headers: {
-          "content-type": "application/json",
-          "cache-control": "no-store",
-        },
-      };
+      throwTileApiError(TileApiErrorCode.HEALTH_BAD_REQUEST);
     }
     const config = loadConfig();
-    if (input.method === "HEAD" && !config.tileDeliveryPolicy.headEnabled) {
-      return {
-        status: 405,
-        body: undefined,
-        headers: {
-          "content-type": "application/json",
-          "cache-control": "no-store",
-        },
-      };
-    }
+    assertHeadEnabled(input.method, config.tileDeliveryPolicy.headEnabled);
     const payload: HealthPayload = {
       status: "ok",
       service: "tileserver",
@@ -499,14 +428,34 @@ export async function handleHealthRequest(input: TileRequest): Promise<TileRespo
         "content-length": contentLength,
       },
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof TileApiError) {
+      if (error.code === TileApiErrorCode.HEALTH_NOT_FOUND) {
+        return {
+          status: 404,
+          body: encodeJsonError(TileApiErrorCode.HEALTH_NOT_FOUND),
+          headers: errorHeaders,
+        };
+      }
+      if (error.code === TileApiErrorCode.HEALTH_BAD_REQUEST) {
+        return {
+          status: 400,
+          body: encodeJsonError(TileApiErrorCode.HEALTH_BAD_REQUEST),
+          headers: errorHeaders,
+        };
+      }
+      if (error.code === TileApiErrorCode.HEAD_DISABLED) {
+        return {
+          status: 405,
+          body: undefined,
+          headers: errorHeaders,
+        };
+      }
+    }
     return {
       status: 500,
-      body: encodeJsonError("HEALTH_UNAVAILABLE"),
-      headers: {
-        "content-type": "application/json",
-        "cache-control": "no-store",
-      },
+      body: encodeJsonError(TileApiErrorCode.HEALTH_UNAVAILABLE),
+      headers: errorHeaders,
     };
   }
 }

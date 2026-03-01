@@ -8,17 +8,16 @@ import { checkRateLimit } from "./policies/rate-limit";
 import { buildCorsHeaders as buildCors } from "./policies/cors-headers";
 import { getProjectPolicy, resolveProjectIdentity } from "../projects/projects.service";
 import { consumeRequestUnit } from "../metering/metering.service";
-import type { ProjectIdentity } from "../projects/types";
 import type { ProjectPolicy } from "../projects/types";
 
 export function authorizeTileRequest(input: AuthorizeContext): AuthorizeResult {
   const config = loadConfig();
   const method = input.method;
-  const headers = normalizeHeaderMap(input.headers as Record<string, string | undefined>);
+  const headers = normalizeHeaderMap(input.headers);
   const origin = headers.origin;
   const authHeader = headers.authorization;
   const tokenCandidate = (input.rawToken ?? headers["x-api-token"]) ?? authHeader;
-  const projectIdentity = resolveProjectIdentity({ rawToken: tokenCandidate }) as ProjectIdentity | null;
+  const projectIdentity = resolveProjectIdentity({ rawToken: tokenCandidate });
   const resolvedIdentity = projectIdentity ? `${projectIdentity.projectId}:${projectIdentity.keyIdHash}` : "anon";
   const projectPolicy = projectIdentity ? getProjectPolicy(projectIdentity.projectId) : undefined;
   const allowedOrigins = projectPolicy?.allowedOrigins ?? config.security.allowedOrigins;

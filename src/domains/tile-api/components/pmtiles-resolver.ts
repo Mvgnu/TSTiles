@@ -2,6 +2,7 @@ import { createObjectStore } from "../../storage/storage.service";
 import { loadConfig } from "../../../config/load-config";
 import type { RangeReadResult } from "../../storage/types";
 import type { ResolvedActiveArtifact } from "./active-artifact-resolver";
+import { TileApiError, TileApiErrorCode } from "../types";
 
 export async function resolveTileBytes(
   artifact: ResolvedActiveArtifact,
@@ -12,7 +13,7 @@ export async function resolveTileBytes(
   const artifactKey = artifact.key;
   const metadata = await store.head(artifactKey);
   if (metadata.size <= 0) {
-    throw new Error("TILE_ARTIFACT_UNAVAILABLE");
+    throw new TileApiError(TileApiErrorCode.ARTIFACT_UNAVAILABLE);
   }
   const maxBytes = Math.max(config.tileDeliveryPolicy.maxRangeBytes, 1);
   let hash = 0;
@@ -27,7 +28,7 @@ export async function resolveTileBytes(
     end,
   });
   if (!result) {
-    throw new Error("TILE_ARTIFACT_UNAVAILABLE");
+    throw new TileApiError(TileApiErrorCode.ARTIFACT_UNAVAILABLE);
   }
   return {
     ...result,

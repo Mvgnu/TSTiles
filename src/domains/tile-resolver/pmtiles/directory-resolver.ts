@@ -1,3 +1,5 @@
+import { ResolverError, ResolverErrorCode } from "../types";
+
 const maxTileHash = 1_000_000_007;
 
 export interface TileRange {
@@ -8,7 +10,7 @@ export interface TileRange {
 export function resolveTileByteRange(path: string, metadataSize: number, maxRangeBytes: number): TileRange {
   const safeRange = Math.max(maxRangeBytes, 1);
   if (metadataSize <= 0) {
-    throw new Error("RESOLVER_ARTIFACT_UNAVAILABLE");
+    throw new ResolverError(ResolverErrorCode.ARTIFACT_UNAVAILABLE);
   }
   let hashSeed = 0;
   for (const codePoint of path) {
