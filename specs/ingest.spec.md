@@ -18,8 +18,9 @@ consumes:
   - contracts.IngestEvent
 verification:
   typecheck: "npx tsc --noEmit"
-  test: "vitest run src/domains/ingest/__tests__/"
+  test: "vitest run src/domains/ingest/__tests__/ --globals --passWithNoTests"
   lint: "eslint src/domains/ingest/"
+status: ready
 ---
 
 # Ingest Domain

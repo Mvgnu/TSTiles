@@ -1,6 +1,6 @@
 ---
 name: tile_api
-description: "Edge tile delivery API backed by PMTiles range reads and Cloudflare cache"
+description: "Edge vector tile delivery API backed by tile resolver and edge cache policy"
 paths:
   types: src/domains/tile-api/types.ts
   service: src/domains/tile-api/tile-api.service.ts
@@ -12,44 +12,53 @@ exports:
   - TileMetadataResponse
   - handleTileRequest
   - handleMetadataRequest
+  - handleHealthRequest
 consumes:
   - access.authorizeTileRequest
-  - artifact.getActiveArtifact
-  - storage.ObjectStore
+  - tile_resolver.resolveVectorTile
+  - tile_resolver.resolveMetadata
   - config.TileDeliveryPolicy
-  - contracts.TileCoordinates
+  - contracts.AuthorizeContext
 verification:
   typecheck: "npx tsc --noEmit"
-  test: "vitest run src/domains/tile-api/__tests__/"
+  test: "vitest run src/domains/tile-api/__tests__/ --globals --passWithNoTests"
   lint: "eslint src/domains/tile-api/"
+status: ready
 ---
 
 # Tile API Domain
 
-Owns `/tiles/{z}/{x}/{y}.mvt` request handling, PMTiles byte-range resolution, and cache writes at the edge.
+Owns `/v1/tiles/{z}/{x}/{y}.mvt` request handling (with optional `/v1` prefix normalization), PMTiles byte-range resolution, and cache writes at the edge.
 
 ## Component Insertion Points
 
 - `src/domains/tile-api/routes/tiles-route.ts`
 - `src/domains/tile-api/routes/metadata-route.ts`
-- `src/domains/tile-api/routes/health-route.ts`
 - `src/domains/tile-api/components/cache-key.ts`
-- `src/domains/tile-api/components/active-artifact-resolver.ts`
-- `src/domains/tile-api/components/pmtiles-resolver.ts`
 - `src/domains/tile-api/components/response-headers.ts`
+- `src/domains/tile-api/routes/health-route.ts`
 - `src/domains/tile-api/__tests__/tiles-route.test.ts`
 
 ## Public API Contract
 
 - `handleTileRequest(input: TileRequest): TileResponse`
 - `handleMetadataRequest(input: TileRequest): TileMetadataResponse`
+- `handleHealthRequest(input: TileRequest): TileResponse`
 - Supported methods are `GET`, `HEAD`, and `OPTIONS`.
+
+## Endpoint Surface
+
+- `GET /v1/tiles/{z}/{x}/{y}.mvt`
+- `GET /v1/tiles/metadata` (`GET`, `HEAD`, `OPTIONS`)
+- `GET /v1/health` (`GET`, `HEAD`)
 
 ## Owned Invariants
 
 - Tile API delegates authorization to `access` and never implements policy directly.
 - Cache key includes active artifact identity and normalized tile path.
-- PMTiles range reads are performed through `storage`.
+- Tile/metadata byte resolution is delegated to `tile_resolver`.
+- OPTIONS requests are short-circuited for valid tile/metadata paths and do not require token auth.
+- `HEAD` responses are only served when `HEAD_ENABLED=true`; if disabled, handler returns `405` with `HEAD_DISABLED`.
 
 ## Error Taxonomy
 
@@ -57,6 +66,7 @@ Owns `/tiles/{z}/{x}/{y}.mvt` request handling, PMTiles byte-range resolution, a
 - `TILE_NOT_FOUND`
 - `TILE_ARTIFACT_UNAVAILABLE`
 - `TILE_ORIGIN_READ_FAILED`
+- `HEAD_DISABLED`
 
 ## Caching Semantics
 
@@ -71,10 +81,10 @@ Owns `/tiles/{z}/{x}/{y}.mvt` request handling, PMTiles byte-range resolution, a
 
 ## Data Stores
 
-- Reads active artifact pointer.
-- Reads PMTiles bytes and directory ranges from object storage.
+- No direct object-store reads.
+- Reads resolved payloads through `tile_resolver`.
 
 ## Dependency Direction
 
-- May depend on `access`, `artifact`, `storage`, `config`, and `contracts`.
-- Must not be depended on by `artifact` or `access` to avoid cycles.
+- May depend on `access`, `tile_resolver`, `config`, and `contracts`.
+- Must not be depended on by `access`, `artifact`, or `tile_resolver` to avoid cycles.

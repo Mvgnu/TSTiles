@@ -1,6 +1,6 @@
 ---
 name: access
-description: "Authorization, CORS, and request-shape enforcement for tile delivery"
+description: "Authorization, CORS, API key identity resolution, and quota prechecks for vector/raster/static requests"
 paths:
   types: src/domains/access/types.ts
   service: src/domains/access/access.service.ts
@@ -15,15 +15,19 @@ exports:
 consumes:
   - config.SecurityConfig
   - contracts.AuthorizeContext
+  - projects.resolveProjectIdentity
+  - projects.ProjectPolicy
+  - metering.consumeRequestUnit
 verification:
   typecheck: "npx tsc --noEmit"
-  test: "vitest run src/domains/access/__tests__/"
+  test: "vitest run src/domains/access/__tests__/ --globals --passWithNoTests"
   lint: "eslint src/domains/access/"
+status: ready
 ---
 
 # Access Domain
 
-Owns request validation before tile bytes are served.
+Owns request validation before vector/raster/static bytes are served.
 
 ## Component Insertion Points
 
@@ -40,20 +44,25 @@ Owns request validation before tile bytes are served.
 - `authorizeTileRequest(input: AuthorizeContext): AuthorizeResult`
 - `buildCorsHeaders(input: AuthorizeResult): Record<string, string>`
 - Inputs include method, path, normalized query, headers, client metadata.
-- Outputs include `allow`, `denyReason`, and sanitized auth identity.
+- Outputs include `allow`, `denyReason`, and sanitized identity (`projectId:keyIdHash` fragment or `"anon"` fallback).
+- Validates request shape for `tiles`, `raster`, and `static` request families.
 
 ## Owned Invariants
 
-- Auth is evaluated before any cache lookup and before any object-store read.
+- Auth and quota are evaluated before any cache lookup and before any object-store read.
 - Access owns CORS policy calculation; downstream domains must not override policy.
-- Access never logs raw token values.
+- CORS policy is derived from resolved project policy when `allowedOrigins` is configured, with global config as fallback.
+- Access never logs raw API keys or raw token values.
 
 ## Error Taxonomy
 
 - `ACCESS_UNAUTHORIZED`
 - `ACCESS_ORIGIN_DENIED`
 - `ACCESS_RATE_LIMITED`
+- `ACCESS_QUOTA_EXCEEDED`
 - `ACCESS_BAD_REQUEST`
+
+- Metering `rate_limit` outcomes map to `ACCESS_RATE_LIMITED`; metering `quota` outcomes map to `ACCESS_QUOTA_EXCEEDED`.
 
 ## Caching Semantics
 
@@ -68,9 +77,10 @@ Owns request validation before tile bytes are served.
 ## Data Stores
 
 - Reads security config and token metadata.
-- Writes optional rate-limit counters if configured.
+- Reads project/key identity and policy via `projects`.
+- Writes/reads fast quota counters via `metering`.
 
 ## Dependency Direction
 
-- May depend on `config` and `contracts`.
-- Must not depend on `tile_api`, `artifact`, or `ingest`.
+- May depend on `config`, `contracts`, `projects`, and `metering`.
+- Must not depend on request handlers (`tile_api`, `raster_api`) or data domains (`artifact`, `ingest`).

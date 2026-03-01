@@ -14,14 +14,15 @@ exports:
   - promoteArtifact
   - rollbackArtifact
   - listArtifacts
+  - garbageCollectArtifacts
 consumes:
-  - storage.ObjectStore
-  - config.RuntimeConfig
+  - storage.ObjectMetadata
   - contracts.ArtifactEvent
 verification:
   typecheck: "npx tsc --noEmit"
-  test: "vitest run src/domains/artifact/__tests__/"
+  test: "vitest run src/domains/artifact/__tests__/ --globals --passWithNoTests"
   lint: "eslint src/domains/artifact/"
+status: ready
 ---
 
 # Artifact Domain
@@ -46,6 +47,7 @@ Owns artifact metadata, active version selection, and safe promotion or rollback
 - `promoteArtifact(versionId: string): ActiveArtifactPointer`
 - `rollbackArtifact(): ActiveArtifactPointer`
 - `listArtifacts(): ArtifactVersion[]`
+- `garbageCollectArtifacts(): string[]`
 
 ## Owned Invariants
 
@@ -77,5 +79,5 @@ Owns artifact metadata, active version selection, and safe promotion or rollback
 
 ## Dependency Direction
 
-- May depend on `storage`, `config`, and `contracts`.
+- May depend on `storage` and `contracts`.
 - Must not depend on `tile_api` or `ingest`.

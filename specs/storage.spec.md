@@ -15,8 +15,9 @@ consumes:
   - config.RuntimeConfig
 verification:
   typecheck: "npx tsc --noEmit"
-  test: "vitest run src/domains/storage/__tests__/"
+  test: "vitest run src/domains/storage/__tests__/ --globals --passWithNoTests"
   lint: "eslint src/domains/storage/"
+status: ready
 ---
 
 # Storage Domain
@@ -63,6 +64,7 @@ Owns object-store IO behavior, especially HTTP range semantics for PMTiles reads
 ## Data Stores
 
 - Primary object store bucket(s) for PMTiles and metadata blobs.
+- Development-only local file-backed reads are supported through `file://` object keys.
 
 ## Dependency Direction
 

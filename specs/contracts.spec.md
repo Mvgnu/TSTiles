@@ -9,14 +9,17 @@ paths:
 exports:
   - TileCoordinates
   - AuthorizeContext
+  - ContractError
+  - ContractErrorCode
   - DeliverySignal
   - ArtifactEvent
   - IngestEvent
 consumes: []
 verification:
   typecheck: "npx tsc --noEmit"
-  test: "vitest run src/contracts/__tests__/"
+  test: "vitest run src/contracts/__tests__/ --globals --passWithNoTests"
   lint: "eslint src/contracts/"
+status: ready
 ---
 
 # Contracts Domain

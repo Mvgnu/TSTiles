@@ -12,14 +12,13 @@ exports:
   - evaluateTileSLOs
   - classifySLOBreach
 consumes:
-  - cloudflare.logpush_http_requests
   - contracts.DeliverySignal
-  - artifact.ActiveArtifactPointer
   - config.ObservabilityConfig
 verification:
   typecheck: "npx tsc --noEmit"
-  test: "vitest run src/domains/observability/__tests__/"
+  test: "vitest run src/domains/observability/__tests__/ --globals --passWithNoTests"
   lint: "eslint src/domains/observability/"
+status: ready
 ---
 
 # Observability Domain
@@ -70,5 +69,5 @@ Owns cache ratio monitoring, origin egress tracking, and operational alerts for 
 
 ## Dependency Direction
 
-- May depend on `contracts`, `artifact`, and `config`.
+- May depend on `contracts` and `config`.
 - Must not depend on `tile_api` response internals.

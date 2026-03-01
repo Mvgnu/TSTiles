@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "panels": [
+    {
+      "name": "cache-hit-ratio",
+      "description": "tile cache hit ratio by 15m window"
+    },
+    {
+      "name": "origin-read-ratio",
+      "description": "origin read ratio by artifact"
+    }
+  ]
+}

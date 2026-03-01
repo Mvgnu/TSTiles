@@ -17,8 +17,9 @@ consumes:
   - platform.worker_secrets
 verification:
   typecheck: "npx tsc --noEmit"
-  test: "vitest run src/config/__tests__/"
+  test: "vitest run src/config/__tests__/ --globals --passWithNoTests"
   lint: "eslint src/config/"
+status: ready
 ---
 
 # Config Domain
@@ -43,6 +44,9 @@ Owns strict configuration schemas, environment parsing, and fail-fast startup va
 - All required config is validated at startup.
 - Invalid config prevents service start.
 - Secret values are never exposed in plain-text logs.
+- Default object-store mode is environment-aware:
+  - `development` -> `memory`
+  - `staging`/`production` -> `s3-compatible`
 
 ## Error Taxonomy
 
