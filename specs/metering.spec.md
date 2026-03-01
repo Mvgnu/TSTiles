@@ -13,6 +13,8 @@ exports:
   - UsageSummary
   - BillingPlan
   - BillingEstimate
+  - MeteringError
+  - MeteringErrorCode
   - consumeRequestUnit
   - recordDeliverySignal
   - getUsageSummary

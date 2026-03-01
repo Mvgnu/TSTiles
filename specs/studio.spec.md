@@ -11,6 +11,8 @@ exports:
   - updateStyleDraft
   - publishStyle
   - getStyleDraft
+  - StudioError
+  - StudioErrorCode
   - StyleAdminDraft
   - StudioStyleListItem
 consumes:

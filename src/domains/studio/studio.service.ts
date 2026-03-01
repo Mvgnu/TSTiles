@@ -1,30 +1,18 @@
 import { createStyleVersion, getStyle, listStyles, publishStyleVersion } from "../styles/styles.service";
 import { isAuthorized } from "../control-plane/auth/admin-auth";
-import type { StyleAdminDraft, StudioStyleListItem } from "./types";
-import type { StyleInput } from "../styles/types";
-
-function styleErrorCode(error: unknown): string | undefined {
-  if (!(error instanceof Error)) {
-    return undefined;
-  }
-  const withCode = error as Error & { code?: unknown };
-  if (typeof withCode.code === "string" && withCode.code.length > 0) {
-    return withCode.code;
-  }
-  const [code] = error.message.split(":");
-  return typeof code === "string" && code.length > 0 ? code : undefined;
-}
+import { StudioError, StudioErrorCode, type StyleAdminDraft, type StudioStyleListItem } from "./types";
+import { StyleError, StyleErrorCode, type StyleInput } from "../styles/types";
 
 function assertAdmin(token?: string): void {
   if (!isAuthorized(token)) {
-    throw new Error("STUDIO_UNAUTHORIZED");
+    throw new StudioError(StudioErrorCode.UNAUTHORIZED, "admin token is required");
   }
 }
 
 function assertNonEmpty(value: string, field: string): string {
   const normalized = value.trim();
   if (normalized.length === 0) {
-    throw new Error(`STUDIO_BAD_REQUEST:${field}`);
+    throw new StudioError(StudioErrorCode.BAD_REQUEST, `${field} is required`);
   }
   return normalized;
 }
@@ -42,7 +30,7 @@ function buildDraftStyle(styleId: string): StyleAdminDraft | undefined {
       previewUrl: `/v1/styles/${styleId}/style.json`,
     };
   } catch (error) {
-    if (styleErrorCode(error) === "STYLE_NOT_FOUND") {
+    if (error instanceof StyleError && error.code === StyleErrorCode.NOT_FOUND) {
       return undefined;
     }
     throw error;
@@ -65,7 +53,7 @@ export function getStyleDraft(styleId: string, token?: string): StyleAdminDraft 
   const normalizedStyleId = assertNonEmpty(styleId, "styleId");
   const draft = buildDraftStyle(normalizedStyleId);
   if (!draft) {
-    throw new Error("STYLE_NOT_FOUND");
+    throw new StyleError(StyleErrorCode.NOT_FOUND, "Style not found");
   }
   return draft;
 }

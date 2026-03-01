@@ -1,6 +1,24 @@
 export type StyleId = string;
 export type StyleVersionId = string;
 
+export const enum StyleErrorCode {
+  NOT_FOUND = "STYLE_NOT_FOUND",
+  VERSION_NOT_FOUND = "STYLE_VERSION_NOT_FOUND",
+  INVALID_DOCUMENT = "STYLE_INVALID_DOCUMENT",
+  PUBLISH_CONFLICT = "STYLE_PUBLISH_CONFLICT",
+  BAD_REQUEST = "STYLE_BAD_REQUEST",
+}
+
+export class StyleError extends Error {
+  public readonly code: StyleErrorCode;
+
+  public constructor(code: StyleErrorCode, details: string) {
+    super(`${code}:${details}`);
+    this.code = code;
+    this.name = "StyleError";
+  }
+}
+
 export interface StyleDocument {
   readonly version: 8 | number;
   readonly sources: Record<string, unknown>;

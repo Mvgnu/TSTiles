@@ -9,6 +9,7 @@ import {
   verifyApiKey,
   rotateApiKey,
 } from "../projects.service";
+import { ProjectsError, ProjectsErrorCode } from "../types";
 
 type TestFunction = (name: string, fn: () => void | Promise<void>) => void;
 const test: TestFunction = ((globalThis as { test?: TestFunction }).test ?? ((_, fn) => {
@@ -59,9 +60,11 @@ test("project bootstrap, identity, and policy", (): void => {
     getProjectPolicy("missing");
     assert.fail("Expected missing project policy to throw");
   } catch (error) {
-    assert.equal(error instanceof Error, true);
-    const message = (error as Error).message;
-    assert.equal(message.includes("PROJECTS_PROJECT_NOT_FOUND"), true);
+    assert.equal(error instanceof ProjectsError, true);
+    if (error instanceof ProjectsError) {
+      assert.equal(error.code, ProjectsErrorCode.PROJECT_NOT_FOUND);
+      assert.equal(error.message.includes("PROJECTS_PROJECT_NOT_FOUND"), true);
+    }
   }
 
   assert.throws(() => {

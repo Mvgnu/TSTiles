@@ -4,7 +4,7 @@ import {
   listStyles,
   resolveStyleAssets,
 } from "./styles.service";
-import type { StyleListItem, StyleVersionId } from "./types";
+import { StyleError, StyleErrorCode, type StyleVersionId } from "./types";
 
 type HttpMethod = "GET" | "HEAD" | "OPTIONS";
 
@@ -31,22 +31,14 @@ interface ParsedStylePath {
   readonly name?: string;
 }
 
-function styleErrorCode(error: unknown): string | undefined {
-  if (!(error instanceof Error)) {
-    return undefined;
-  }
-  const withCode = error as Error & { code?: unknown };
-  if (typeof withCode.code === "string" && withCode.code.length > 0) {
-    return withCode.code;
-  }
-  const [code] = error.message.split(":");
-  return typeof code === "string" && code.length > 0 ? code : undefined;
+function throwStyleRouteError(code: StyleErrorCode, details: string): never {
+  throw new StyleError(code, details);
 }
 
 function getPublishedStyle(styleId: string): { styleId: string; document: ReturnType<typeof getStyle> } {
   const record = listStyles().find((entry) => entry.id === styleId);
   if (!record || !record.publishedVersionId) {
-    throw new Error("STYLE_NOT_FOUND");
+    throwStyleRouteError(StyleErrorCode.NOT_FOUND, "Style not found");
   }
   return {
     styleId,
@@ -76,7 +68,7 @@ function buildCorsHeaders(): Record<string, string> {
 function normalizePathSegment(value: string, field: string): string {
   const trimmed = value.trim();
   if (trimmed.length === 0) {
-    throw new Error(`STYLE_BAD_REQUEST:${field}`);
+    throwStyleRouteError(StyleErrorCode.BAD_REQUEST, field);
   }
   return trimmed;
 }
@@ -94,7 +86,7 @@ function parseStylePath(path: string): ParsedStylePath {
         styleId: normalizePathSegment(decodeURIComponent(jsonMatch[1] ?? ""), "styleId"),
       };
     } catch {
-      throw new Error("STYLE_BAD_REQUEST");
+      throwStyleRouteError(StyleErrorCode.BAD_REQUEST, "style path");
     }
   }
   const spriteMatch = spriteRegex.exec(normalized);
@@ -110,7 +102,7 @@ function parseStylePath(path: string): ParsedStylePath {
         versionId: undefined,
       };
     } catch {
-      throw new Error("STYLE_BAD_REQUEST");
+      throwStyleRouteError(StyleErrorCode.BAD_REQUEST, "sprite path");
     }
   }
   const fontMatch = fontRegex.exec(normalized);
@@ -122,10 +114,10 @@ function parseStylePath(path: string): ParsedStylePath {
         name: `${decodeURIComponent(fontMatch[1] ?? "")}/${fontMatch[2] ?? ""}`,
       };
     } catch {
-      throw new Error("STYLE_BAD_REQUEST");
+      throwStyleRouteError(StyleErrorCode.BAD_REQUEST, "font path");
     }
   }
-  throw new Error("STYLE_BAD_REQUEST");
+  throwStyleRouteError(StyleErrorCode.BAD_REQUEST, "path");
 }
 
 function encodeJsonError(code: string): string {
@@ -237,8 +229,10 @@ export async function handleStyleRequest(input: StyleRequest): Promise<StyleResp
       };
     }
   } catch (error) {
-    const code = styleErrorCode(error);
-    if (code === "STYLE_NOT_FOUND" || code === "STYLE_VERSION_NOT_FOUND") {
+    if (
+      error instanceof StyleError
+      && (error.code === StyleErrorCode.NOT_FOUND || error.code === StyleErrorCode.VERSION_NOT_FOUND)
+    ) {
       return {
         status: 404,
         body: encodeJsonError("STYLE_NOT_FOUND"),
@@ -249,7 +243,10 @@ export async function handleStyleRequest(input: StyleRequest): Promise<StyleResp
         },
       };
     }
-    if (code === "STYLE_BAD_REQUEST" || code === "STYLE_INVALID_DOCUMENT") {
+    if (
+      error instanceof StyleError
+      && (error.code === StyleErrorCode.BAD_REQUEST || error.code === StyleErrorCode.INVALID_DOCUMENT)
+    ) {
       return {
         status: 400,
         body: encodeJsonError("STYLE_BAD_REQUEST"),

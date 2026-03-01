@@ -4,6 +4,23 @@ export interface AllowedEndpointPolicy {
   readonly staticMaps: boolean;
 }
 
+export const enum ProjectsErrorCode {
+  KEY_INVALID = "PROJECTS_KEY_INVALID",
+  KEY_REVOKED = "PROJECTS_KEY_REVOKED",
+  PROJECT_NOT_FOUND = "PROJECTS_PROJECT_NOT_FOUND",
+  POLICY_INVALID = "PROJECTS_POLICY_INVALID",
+}
+
+export class ProjectsError extends Error {
+  public readonly code: ProjectsErrorCode;
+
+  public constructor(code: ProjectsErrorCode, details: string) {
+    super(`${code}:${details}`);
+    this.code = code;
+    this.name = "ProjectsError";
+  }
+}
+
 export interface ProjectQuotaPolicy {
   readonly dailyRequests?: number;
   readonly monthlyRequests?: number;

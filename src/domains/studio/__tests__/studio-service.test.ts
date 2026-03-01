@@ -6,6 +6,7 @@ import {
   publishStyle,
   updateStyleDraft,
 } from "../studio.service";
+import { StudioError, StudioErrorCode } from "../types";
 
 type TestFunction = (name: string, fn: () => void | Promise<void>) => void;
 const test: TestFunction = ((globalThis as { test?: TestFunction }).test ?? ((_, fn) => {
@@ -18,8 +19,18 @@ process.env.ALLOWED_ORIGINS = "https://example.com";
 process.env.NODE_ENV = "development";
 
 test("studio operations enforce admin auth", (): void => {
-  assert.throws(() => {
+  try {
     listStylesAdmin("bad-token");
+    assert.fail("expected studio unauthorized");
+  } catch (error) {
+    assert.equal(error instanceof StudioError, true);
+    if (error instanceof StudioError) {
+      assert.equal(error.code, StudioErrorCode.UNAUTHORIZED);
+    }
+  }
+
+  assert.throws(() => {
+    listStylesAdmin("bad-token-2");
   }, /STUDIO_UNAUTHORIZED/);
 
   assert.throws(() => {

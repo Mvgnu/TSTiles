@@ -10,6 +10,8 @@ exports:
   - StyleId
   - StyleVersion
   - StyleDocument
+  - StyleError
+  - StyleErrorCode
   - StyleInput
   - StyleAssets
   - StyleTemplateConfig

@@ -9,6 +9,7 @@ import type {
   StyleVersion,
   StyleVersionId,
 } from "./types";
+import { StyleErrorCode, StyleError } from "./types";
 
 interface InternalStyleRecord {
   name: string;
@@ -35,10 +36,10 @@ function isTemplateWithoutRawToken(value: string): boolean {
 
 function validateSourceTileUrl(label: string, url: unknown): void {
   if (!isString(url)) {
-    throw buildError("STYLE_INVALID_DOCUMENT", `${label} tile source must be a URL template`);
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, `${label} tile source must be a URL template`);
   }
   if (!isTemplateWithoutRawToken(url)) {
-    throw buildError("STYLE_INVALID_DOCUMENT", `${label} tile source must not expose raw credentials`);
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, `${label} tile source must not expose raw credentials`);
   }
   const isAbsoluteUrl = url.startsWith("http://") || url.startsWith("https://");
   const [templatePath, rawSearch] = isAbsoluteUrl
@@ -50,10 +51,10 @@ function validateSourceTileUrl(label: string, url: unknown): void {
   const search = rawSearch === undefined ? "" : `?${rawSearch}`;
   const fullPath = `${templatePath}${search}`;
   if (!TEMPLATED_TILE_PATH.test(fullPath)) {
-    throw buildError("STYLE_INVALID_DOCUMENT", `${label} tile source must use the service tile template`);
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, `${label} tile source must use the service tile template`);
   }
   if (!TILE_TOKEN_PATTERN.test(search)) {
-    throw buildError("STYLE_INVALID_DOCUMENT", `${label} tile source must include {access_token} placeholder`);
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, `${label} tile source must include {access_token} placeholder`);
   }
 }
 
@@ -62,7 +63,7 @@ function validateSourceSourceObject(source: Record<string, unknown>, sourceName:
     return;
   }
   if (typeof source !== "object" || source === null) {
-    throw buildError("STYLE_INVALID_DOCUMENT", `style source ${sourceName} must be an object`);
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, `style source ${sourceName} must be an object`);
   }
 
   const sourceUrl = source.url;
@@ -75,18 +76,18 @@ function validateSourceSourceObject(source: Record<string, unknown>, sourceName:
 
   if (Array.isArray(sourceTiles)) {
     if (!sourceTiles.length) {
-      throw buildError("STYLE_INVALID_DOCUMENT", `source ${sourceName} must include non-empty tile templates`);
+      throw buildError(StyleErrorCode.INVALID_DOCUMENT, `source ${sourceName} must include non-empty tile templates`);
     }
     for (const [index, tileUrl] of sourceTiles.entries()) {
       if (typeof tileUrl !== "string") {
-        throw buildError("STYLE_INVALID_DOCUMENT", `source ${sourceName} tile ${index} must be a URL string`);
+        throw buildError(StyleErrorCode.INVALID_DOCUMENT, `source ${sourceName} tile ${index} must be a URL string`);
       }
       validateSourceTileUrl(`source ${sourceName}`, tileUrl);
     }
     return;
   }
 
-  throw buildError("STYLE_INVALID_DOCUMENT", `source ${sourceName} must include url or tiles`);
+  throw buildError(StyleErrorCode.INVALID_DOCUMENT, `source ${sourceName} must include url or tiles`);
 }
 
 function validateSourceObject(document: StyleInput): void {
@@ -101,10 +102,10 @@ function validateSpriteTemplate(sprites: unknown): void {
     return;
   }
   if (!isTemplateWithoutRawToken(sprites)) {
-    throw buildError("STYLE_INVALID_DOCUMENT", "sprites URL must not contain raw credentials");
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, "sprites URL must not contain raw credentials");
   }
   if (!SPRITE_PATTERN.test(sprites)) {
-    throw buildError("STYLE_INVALID_DOCUMENT", "sprites URL must be service template placeholder");
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, "sprites URL must be service template placeholder");
   }
 }
 
@@ -113,24 +114,22 @@ function validateGlyphTemplate(glyphs: unknown): void {
     return;
   }
   if (!isTemplateWithoutRawToken(glyphs)) {
-    throw buildError("STYLE_INVALID_DOCUMENT", "glyphs URL must not contain raw credentials");
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, "glyphs URL must not contain raw credentials");
   }
   if (!GLYPH_PATTERN.test(glyphs)) {
-    throw buildError("STYLE_INVALID_DOCUMENT", "glyphs URL must be service template placeholder");
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, "glyphs URL must be service template placeholder");
   }
 }
 
 const styles = new Map<StyleId, InternalStyleRecord>();
 
-function buildError(code: string, message: string): Error & { code: string } {
-  const error = new Error(`${code}: ${message}`) as Error & { code: string };
-  error.code = code;
-  return error;
+function buildError(code: StyleErrorCode, message: string): StyleError {
+  return new StyleError(code, message);
 }
 
 function normalizeStyleInput(input: unknown): StyleInput {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
-    throw buildError("STYLE_INVALID_DOCUMENT", "Invalid style document");
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, "Invalid style document");
   }
   return input as Record<string, unknown>;
 }
@@ -138,7 +137,7 @@ function normalizeStyleInput(input: unknown): StyleInput {
 function normalizeRequiredIdentifier(value: string, field: string): string {
   const normalized = value.trim();
   if (normalized.length === 0) {
-    throw buildError("STYLE_INVALID_DOCUMENT", `${field} must be non-empty`);
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, `${field} must be non-empty`);
   }
   return normalized;
 }
@@ -149,7 +148,7 @@ function normalizeOptionalVersionIdentifier(value?: string): string | undefined 
   }
   const normalized = value.trim();
   if (normalized.length === 0) {
-    throw buildError("STYLE_INVALID_DOCUMENT", "versionId must be non-empty");
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, "versionId must be non-empty");
   }
   return normalized;
 }
@@ -177,14 +176,14 @@ function assertValidStyleDocument(document: StyleInput): void {
   const version = document.version;
   const sources = document.sources;
   if (typeof version !== "number" || version < 8) {
-    throw buildError("STYLE_INVALID_DOCUMENT", "Style JSON must include mapbox version");
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, "Style JSON must include mapbox version");
   }
   if (!sources || typeof sources !== "object" || Array.isArray(sources)) {
-    throw buildError("STYLE_INVALID_DOCUMENT", "Style JSON must include a sources object");
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, "Style JSON must include a sources object");
   }
   const serialized = JSON.stringify(document);
   if (serialized.includes("pk.") || serialized.includes("sk.")) {
-    throw buildError("STYLE_INVALID_DOCUMENT", "Style JSON must not contain raw credentials");
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, "Style JSON must not contain raw credentials");
   }
   validateSourceObject(document);
   validateSpriteTemplate(document.sprites);
@@ -210,7 +209,7 @@ export function validateStyleDocument(style: unknown): {
 function getStyleRecord(styleId: string): InternalStyleRecord {
   const record = styles.get(styleId);
   if (!record) {
-    throw buildError("STYLE_NOT_FOUND", "Style not found");
+    throw buildError(StyleErrorCode.NOT_FOUND, "Style not found");
   }
   return record;
 }
@@ -227,7 +226,7 @@ export function listStyles(): StyleListItem[] {
 function ensureVersionExists(record: InternalStyleRecord, versionId: string): StyleVersion {
   const version = record.versions.get(versionId);
   if (!version) {
-    throw buildError("STYLE_VERSION_NOT_FOUND", "Style version not found");
+    throw buildError(StyleErrorCode.VERSION_NOT_FOUND, "Style version not found");
   }
   return version;
 }
@@ -243,7 +242,7 @@ export function getStyle(styleId: string, versionId?: string): StyleDocument {
     targetVersion = record.publishedVersionId;
   }
   if (!targetVersion) {
-    throw buildError("STYLE_VERSION_NOT_FOUND", "No published style version");
+    throw buildError(StyleErrorCode.VERSION_NOT_FOUND, "No published style version");
   }
   const version = ensureVersionExists(record, targetVersion);
   return version.document;
@@ -285,7 +284,7 @@ export function publishStyleVersion(styleId: string, versionId: string): StyleVe
   // Re-validate at publish boundary to guard against storage/state corruption.
   assertValidStyleDocument(version.document);
   if (record.publishedVersionId === version.id) {
-    throw buildError("STYLE_PUBLISH_CONFLICT", "Style version already published");
+    throw buildError(StyleErrorCode.PUBLISH_CONFLICT, "Style version already published");
   }
   record.publishedVersionId = version.id;
   return version;
@@ -298,7 +297,7 @@ export function resolveStyleAssets(styleId: string, versionId?: string): StyleAs
   const record = getStyleRecord(normalizedStyleId);
   const resolvedVersionId = normalizedVersionId ?? record.publishedVersionId ?? record.latestVersionId;
   if (!resolvedVersionId) {
-    throw buildError("STYLE_VERSION_NOT_FOUND", "No style version");
+    throw buildError(StyleErrorCode.VERSION_NOT_FOUND, "No style version");
   }
   return {
     styleId: normalizedStyleId,

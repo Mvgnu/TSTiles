@@ -12,6 +12,8 @@ exports:
   - ProjectIdentity
   - ProjectCreationInput
   - ProjectPolicy
+  - ProjectsError
+  - ProjectsErrorCode
   - resolveProjectIdentity
   - verifyApiKey
   - listProjects

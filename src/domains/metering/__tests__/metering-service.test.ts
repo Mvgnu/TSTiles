@@ -7,7 +7,7 @@ import {
   recordDeliverySignal,
 } from "../metering.service";
 import { loadConfig } from "../../../config/load-config";
-import type { UsageSummary } from "../types";
+import { MeteringError, MeteringErrorCode, type UsageSummary } from "../types";
 
 type TestFunction = (name: string, fn: () => void | Promise<void>) => void;
 const test: TestFunction = ((globalThis as { test?: TestFunction }).test ?? ((_, fn) => {
@@ -497,6 +497,28 @@ test("computeBillingEstimate rejects non-monthly usage windows", () => {
       unit: "request",
     });
   }, /METERING_BAD_IDENTITY/);
+});
+
+test("computeBillingEstimate throws typed MeteringError for invalid identity inputs", () => {
+  try {
+    computeBillingEstimate({
+      projectId: "project-1",
+      keyHash: "key-1",
+      planId: "free",
+      window: "day",
+      bucket: "2026-02-20",
+      endpointGroup: "tiles",
+      requestCount: 1,
+      unit: "request",
+    });
+    assert.fail("expected metering bad identity error");
+  } catch (error) {
+    assert.equal(error instanceof MeteringError, true);
+    if (error instanceof MeteringError) {
+      assert.equal(error.code, MeteringErrorCode.BAD_IDENTITY);
+      assert.equal(error.message.startsWith("METERING_BAD_IDENTITY"), true);
+    }
+  }
 });
 
 test("recordDeliverySignal is asynchronous and non-blocking", async () => {

@@ -42,8 +42,7 @@ function extractErrorCode(error: unknown): string | undefined {
   if (typeof withCode.code === "string" && withCode.code.length > 0) {
     return withCode.code;
   }
-  const [code] = error.message.split(":");
-  return typeof code === "string" && code.length > 0 ? code : undefined;
+  return undefined;
 }
 
 function normalizeErrorMessage(error: unknown): string {

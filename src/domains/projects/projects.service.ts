@@ -1,6 +1,14 @@
 import { createHash, randomUUID, randomBytes } from "node:crypto";
 import { loadConfig } from "../../config/load-config";
-import type { ApiKeyRecord, Project, ProjectCreationInput, ProjectIdentity, ProjectPolicy } from "./types";
+import {
+  ProjectsError,
+  ProjectsErrorCode,
+  type ApiKeyRecord,
+  type Project,
+  type ProjectCreationInput,
+  type ProjectIdentity,
+  type ProjectPolicy,
+} from "./types";
 
 const defaultPlanId = "free";
 const defaultPolicy: ProjectPolicy = {
@@ -19,8 +27,8 @@ const projects = new Map<string, Project>();
 const apiKeys = new Map<string, ApiKeyRecord>();
 let initialized = false;
 
-function buildProjectsPolicyError(message: string): Error {
-  return new Error(`PROJECTS_POLICY_INVALID:${message}`);
+function buildProjectsPolicyError(message: string): ProjectsError {
+  return new ProjectsError(ProjectsErrorCode.POLICY_INVALID, message);
 }
 
 function normalizeToken(raw: string | undefined): string | undefined {
@@ -65,7 +73,7 @@ function normalizeProjectName(name: string): string {
 function normalizeProjectId(projectId: string): string {
   const normalized = projectId.trim();
   if (normalized.length === 0) {
-    throw new Error("PROJECTS_PROJECT_NOT_FOUND");
+    throw new ProjectsError(ProjectsErrorCode.PROJECT_NOT_FOUND, "projectId is required");
   }
   return normalized;
 }
@@ -233,7 +241,7 @@ function registerApiKey(projectId: string, rawToken: string): ApiKeyRecord {
   const keyId = buildKeyId(keyHash);
   const project = projects.get(projectId);
   if (!project) {
-    throw new Error("PROJECTS_PROJECT_NOT_FOUND");
+    throw new ProjectsError(ProjectsErrorCode.PROJECT_NOT_FOUND, "project not found");
   }
   const record: ApiKeyRecord = {
     projectId,
@@ -290,7 +298,7 @@ export function getProjectPolicy(projectId: string): Project["policy"] {
   const normalizedProjectId = normalizeProjectId(projectId);
   const project = projects.get(normalizedProjectId);
   if (!project) {
-    throw new Error("PROJECTS_PROJECT_NOT_FOUND");
+    throw new ProjectsError(ProjectsErrorCode.PROJECT_NOT_FOUND, "project not found");
   }
   return project.policy;
 }
@@ -319,7 +327,7 @@ export function rotateApiKey(projectId: string): ApiKeyRecord {
   const normalizedProjectId = normalizeProjectId(projectId);
   const project = projects.get(normalizedProjectId);
   if (!project) {
-    throw new Error("PROJECTS_PROJECT_NOT_FOUND");
+    throw new ProjectsError(ProjectsErrorCode.PROJECT_NOT_FOUND, "project not found");
   }
   for (const [keyHash, record] of apiKeys.entries()) {
     if (record.projectId === project.id && !record.revoked) {
@@ -338,7 +346,7 @@ export function revokeApiKey(projectId: string, keyId: string): ApiKeyRecord {
   const normalizedProjectId = normalizeProjectId(projectId);
   const normalizedKeyId = keyId.trim();
   if (normalizedKeyId.length === 0) {
-    throw new Error("PROJECTS_KEY_INVALID");
+    throw new ProjectsError(ProjectsErrorCode.KEY_INVALID, "keyId is required");
   }
   for (const [hash, record] of apiKeys.entries()) {
     if (record.projectId !== normalizedProjectId || record.keyId !== normalizedKeyId) {
@@ -354,14 +362,14 @@ export function revokeApiKey(projectId: string, keyId: string): ApiKeyRecord {
     apiKeys.set(hash, revokedRecord);
     return revokedRecord;
   }
-  throw new Error("PROJECTS_KEY_INVALID");
+  throw new ProjectsError(ProjectsErrorCode.KEY_INVALID, "key not found");
 }
 
 export function deleteProject(projectId: string): void {
   bootstrapLegacyProjects();
   const normalizedProjectId = normalizeProjectId(projectId);
   if (!projects.delete(normalizedProjectId)) {
-    throw new Error("PROJECTS_PROJECT_NOT_FOUND");
+    throw new ProjectsError(ProjectsErrorCode.PROJECT_NOT_FOUND, "project not found");
   }
   for (const [hash, record] of apiKeys.entries()) {
     if (record.projectId === normalizedProjectId) {

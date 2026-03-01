@@ -3,6 +3,20 @@ export type UsageUnit = "request";
 export type UsageCounterWindow = "minute" | "day" | "month";
 export type MeteringEndpointGroup = "tiles" | "raster" | "static";
 
+export const enum MeteringErrorCode {
+  BAD_IDENTITY = "METERING_BAD_IDENTITY",
+}
+
+export class MeteringError extends Error {
+  public readonly code: MeteringErrorCode;
+
+  public constructor(code: MeteringErrorCode, details: string) {
+    super(`${code}:${details}`);
+    this.code = code;
+    this.name = "MeteringError";
+  }
+}
+
 export type QuotaReason = "quota" | "rate_limit";
 
 export interface QuotaDecision {

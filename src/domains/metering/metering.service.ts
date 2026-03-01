@@ -1,6 +1,10 @@
 import type { DeliverySignal } from "../../contracts/types";
 import { getProjectPolicy } from "../projects/projects.service";
 import type { ProjectPolicy } from "../projects/types";
+import {
+  MeteringErrorCode,
+  MeteringError,
+} from "./types";
 import type {
   BillingEstimate,
   BillingPlan,
@@ -50,6 +54,10 @@ interface WindowCounterState {
   readonly limit?: number;
   readonly current: number;
   readonly next: number;
+}
+
+function throwMeteringError(code: MeteringErrorCode, details: string): never {
+  throw new MeteringError(code, details);
 }
 
 function normalizeEndpointGroup(endpointGroup: string): EndpointGroup | null {
@@ -434,20 +442,20 @@ function resolveBillingPlan(planId: string): BillingPlan {
 export function computeBillingEstimate(summary: UsageSummary | UsageSummary[], plan?: BillingPlan): BillingEstimate {
   const items = Array.isArray(summary) ? summary : [summary];
   if (items.some((item) => item.window !== "month")) {
-    throw new Error("METERING_BAD_IDENTITY:billing estimate requires monthly usage windows");
+    throwMeteringError(MeteringErrorCode.BAD_IDENTITY, "billing estimate requires monthly usage windows");
   }
   const firstProjectId = items[0]?.projectId;
   if (firstProjectId !== undefined && items.some((item) => item.projectId !== firstProjectId)) {
-    throw new Error("METERING_BAD_IDENTITY:billing estimate requires a single projectId");
+    throwMeteringError(MeteringErrorCode.BAD_IDENTITY, "billing estimate requires a single projectId");
   }
   const firstPlanId = items[0]?.planId.toLowerCase();
   if (firstPlanId !== undefined && items.some((item) => item.planId.toLowerCase() !== firstPlanId)) {
-    throw new Error("METERING_BAD_IDENTITY:billing estimate requires a single planId");
+    throwMeteringError(MeteringErrorCode.BAD_IDENTITY, "billing estimate requires a single planId");
   }
   const summaryPlanId = (items[0]?.planId ?? "free").toLowerCase();
   const resolvedPlan = plan ?? resolveBillingPlan(summaryPlanId);
   if (plan && items.length > 0 && plan.planId.toLowerCase() !== summaryPlanId) {
-    throw new Error("METERING_BAD_IDENTITY:explicit billing plan does not match usage summary");
+    throwMeteringError(MeteringErrorCode.BAD_IDENTITY, "explicit billing plan does not match usage summary");
   }
   const requestCount = items.reduce((total: number, item) => total + item.requestCount, 0);
   const billableUnits = Math.max(requestCount - resolvedPlan.freeAllowancePerMonth, 0);
