@@ -17,6 +17,18 @@ import { mapStorageError } from "./adapters/error-mapper";
 
 const objectStoreByBucket = new Map<string, InMemoryObjectStoreClient>();
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (!isRecord(error)) {
+    return undefined;
+  }
+  const code = error.code;
+  return typeof code === "string" ? code : undefined;
+}
+
 function isFileUrlKey(key: string): boolean {
   return key.toLowerCase().startsWith("file://");
 }
@@ -40,14 +52,12 @@ function mapFsError(error: unknown, key: string): never {
   if (error instanceof StorageError) {
     throw error;
   }
-  if (error && typeof error === "object") {
-    const withCode = error as { code?: string };
-    if (withCode.code === "ENOENT") {
-      throw new StorageError(StorageErrorCode.NOT_FOUND, "Object not found", key);
-    }
-    if (withCode.code === "EACCES" || withCode.code === "EPERM") {
-      throw new StorageError(StorageErrorCode.PRECONDITION_FAILED, "Object is not readable", key);
-    }
+  const code = errorCode(error);
+  if (code === "ENOENT") {
+    throw new StorageError(StorageErrorCode.NOT_FOUND, "Object not found", key);
+  }
+  if (code === "EACCES" || code === "EPERM") {
+    throw new StorageError(StorageErrorCode.PRECONDITION_FAILED, "Object is not readable", key);
   }
   throw new StorageError(StorageErrorCode.TIMEOUT, "Storage timeout", key);
 }

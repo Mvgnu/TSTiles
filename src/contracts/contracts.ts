@@ -35,14 +35,17 @@ function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function isTileCoordinates(value: unknown): value is TileCoordinates {
-  if (!value || typeof value !== "object") {
+  if (!isRecord(value)) {
     return false;
   }
-  const candidate = value as Record<string, unknown>;
-  const z = candidate.z;
-  const x = candidate.x;
-  const y = candidate.y;
+  const z = value.z;
+  const x = value.x;
+  const y = value.y;
   return isNonNegativeInteger(z) && isNonNegativeInteger(x) && isNonNegativeInteger(y);
 }
 

@@ -57,6 +57,14 @@ Owns admin-only style editing workflows and publish controls.
 - Validation runs before draft save and publish.
 - Published version changes are auditable.
 
+## Error Taxonomy
+
+- `STUDIO_UNAUTHORIZED`
+- `STUDIO_BAD_REQUEST`
+- `STUDIO_NOT_FOUND`
+- `STUDIO_CONFLICT`
+- `STUDIO_DEPENDENCY_FAILED`
+
 ## Dependency Direction
 
 - May depend on `styles` and control-plane auth boundary.

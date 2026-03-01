@@ -104,6 +104,13 @@ function assertHeadEnabled(method: HttpMethod, headEnabled: boolean): void {
   }
 }
 
+function assertTileMethod(method: string): void {
+  if (method === "GET" || method === "HEAD") {
+    return;
+  }
+  throwTileApiError(TileApiErrorCode.BAD_REQUEST);
+}
+
 function byteLengthUtf8(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
@@ -142,6 +149,13 @@ function mapTileApiError(error: TileApiError, headers: Record<string, string>): 
     return {
       status: 405,
       body: undefined,
+      headers,
+    };
+  }
+  if (error.code === TileApiErrorCode.BAD_REQUEST) {
+    return {
+      status: 400,
+      body: encodeJsonError(TileApiErrorCode.BAD_REQUEST),
       headers,
     };
   }
@@ -218,6 +232,7 @@ export async function handleTileRequest(input: TileRequest): Promise<TileRespons
       }
     }
     const config = loadConfig();
+    assertTileMethod(input.method);
     assertHeadEnabled(input.method, config.tileDeliveryPolicy.headEnabled);
     const auth = authorizeTileRequest({
       method: input.method,
@@ -306,6 +321,7 @@ export async function handleMetadataRequest(input: TileRequest): Promise<TileMet
       };
     }
     const config = loadConfig();
+    assertTileMethod(input.method);
     assertHeadEnabled(input.method, config.tileDeliveryPolicy.headEnabled);
     const auth = authorizeTileRequest({
       method: input.method,

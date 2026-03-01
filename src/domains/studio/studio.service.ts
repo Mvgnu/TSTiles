@@ -17,6 +17,28 @@ function assertNonEmpty(value: string, field: string): string {
   return normalized;
 }
 
+function mapStyleError(error: unknown): never {
+  if (error instanceof StudioError) {
+    throw error;
+  }
+  if (error instanceof StyleError) {
+    if (error.code === StyleErrorCode.NOT_FOUND || error.code === StyleErrorCode.VERSION_NOT_FOUND) {
+      throw new StudioError(StudioErrorCode.NOT_FOUND, error.message);
+    }
+    if (error.code === StyleErrorCode.PUBLISH_CONFLICT) {
+      throw new StudioError(StudioErrorCode.CONFLICT, error.message);
+    }
+    if (error.code === StyleErrorCode.BAD_REQUEST || error.code === StyleErrorCode.INVALID_DOCUMENT) {
+      throw new StudioError(StudioErrorCode.BAD_REQUEST, error.message);
+    }
+    throw new StudioError(StudioErrorCode.DEPENDENCY_FAILED, error.message);
+  }
+  if (error instanceof Error) {
+    throw new StudioError(StudioErrorCode.DEPENDENCY_FAILED, error.message);
+  }
+  throw new StudioError(StudioErrorCode.DEPENDENCY_FAILED, "studio operation failed");
+}
+
 function buildDraftStyle(styleId: string): StyleAdminDraft | undefined {
   try {
     const document = getStyle(styleId);
@@ -33,7 +55,7 @@ function buildDraftStyle(styleId: string): StyleAdminDraft | undefined {
     if (error instanceof StyleError && error.code === StyleErrorCode.NOT_FOUND) {
       return undefined;
     }
-    throw error;
+    mapStyleError(error);
   }
 }
 
@@ -53,7 +75,7 @@ export function getStyleDraft(styleId: string, token?: string): StyleAdminDraft 
   const normalizedStyleId = assertNonEmpty(styleId, "styleId");
   const draft = buildDraftStyle(normalizedStyleId);
   if (!draft) {
-    throw new StyleError(StyleErrorCode.NOT_FOUND, "Style not found");
+    throw new StudioError(StudioErrorCode.NOT_FOUND, "style not found");
   }
   return draft;
 }
@@ -61,24 +83,32 @@ export function getStyleDraft(styleId: string, token?: string): StyleAdminDraft 
 export function updateStyleDraft(styleId: string, input: StyleInput, token?: string): StyleAdminDraft {
   assertAdmin(token);
   const normalizedStyleId = assertNonEmpty(styleId, "styleId");
-  const version = createStyleVersion(normalizedStyleId, input);
-  return {
-    styleId: normalizedStyleId,
-    versionId: version.id,
-    document: version.document,
-    previewUrl: `/v1/styles/${normalizedStyleId}/style.json`,
-  };
+  try {
+    const version = createStyleVersion(normalizedStyleId, input);
+    return {
+      styleId: normalizedStyleId,
+      versionId: version.id,
+      document: version.document,
+      previewUrl: `/v1/styles/${normalizedStyleId}/style.json`,
+    };
+  } catch (error) {
+    mapStyleError(error);
+  }
 }
 
 export function publishStyle(styleId: string, versionId: string, token?: string): StyleAdminDraft {
   assertAdmin(token);
   const normalizedStyleId = assertNonEmpty(styleId, "styleId");
   const normalizedVersionId = assertNonEmpty(versionId, "versionId");
-  const version = publishStyleVersion(normalizedStyleId, normalizedVersionId);
-  return {
-    styleId: normalizedStyleId,
-    versionId: version.id,
-    document: version.document,
-    previewUrl: `/v1/styles/${normalizedStyleId}/style.json`,
-  };
+  try {
+    const version = publishStyleVersion(normalizedStyleId, normalizedVersionId);
+    return {
+      styleId: normalizedStyleId,
+      versionId: version.id,
+      document: version.document,
+      previewUrl: `/v1/styles/${normalizedStyleId}/style.json`,
+    };
+  } catch (error) {
+    mapStyleError(error);
+  }
 }

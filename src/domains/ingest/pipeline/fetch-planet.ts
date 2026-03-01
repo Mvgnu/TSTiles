@@ -4,21 +4,11 @@ import { IngestError, IngestErrorCode, type PlanetSnapshot } from "../types";
 const toBytes = (value: string): Uint8Array => new TextEncoder().encode(value);
 
 async function fetchFromUrl(url: string): Promise<Uint8Array> {
-  const fetchFn = (globalThis as {
-    fetch?: (...args: unknown[]) => Promise<{
-      ok: boolean;
-      status: number;
-      arrayBuffer: () => Promise<ArrayBuffer>;
-    }>;
-  }).fetch;
+  const fetchFn = globalThis.fetch;
   if (!fetchFn) {
     throw new IngestError(IngestErrorCode.SOURCE_UNAVAILABLE, "fetch is unavailable in runtime");
   }
-  let response: {
-    ok: boolean;
-    status: number;
-    arrayBuffer: () => Promise<ArrayBuffer>;
-  };
+  let response: Response;
   try {
     response = await fetchFn(url);
   } catch {

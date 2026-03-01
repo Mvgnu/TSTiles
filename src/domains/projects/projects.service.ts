@@ -62,6 +62,10 @@ function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function normalizeProjectName(name: string): string {
   const trimmed = name.trim();
   if (trimmed.length === 0) {
@@ -124,27 +128,25 @@ function validateQuotaPolicy(quotas: unknown): ProjectPolicy["quotas"] {
   if (quotas === undefined) {
     return undefined;
   }
-  if (!quotas || typeof quotas !== "object" || Array.isArray(quotas)) {
+  if (!isRecord(quotas)) {
     throw buildProjectsPolicyError("quotas must be an object");
   }
-  const candidate = quotas as {
-    readonly dailyRequests?: unknown;
-    readonly monthlyRequests?: unknown;
-    readonly minuteRequests?: unknown;
-  };
-  if (candidate.dailyRequests !== undefined && !isPositiveInteger(candidate.dailyRequests)) {
+  const dailyRequests = quotas.dailyRequests;
+  const monthlyRequests = quotas.monthlyRequests;
+  const minuteRequests = quotas.minuteRequests;
+  if (dailyRequests !== undefined && !isPositiveInteger(dailyRequests)) {
     throw buildProjectsPolicyError("dailyRequests must be a positive integer");
   }
-  if (candidate.monthlyRequests !== undefined && !isPositiveInteger(candidate.monthlyRequests)) {
+  if (monthlyRequests !== undefined && !isPositiveInteger(monthlyRequests)) {
     throw buildProjectsPolicyError("monthlyRequests must be a positive integer");
   }
-  if (candidate.minuteRequests !== undefined && !isPositiveInteger(candidate.minuteRequests)) {
+  if (minuteRequests !== undefined && !isPositiveInteger(minuteRequests)) {
     throw buildProjectsPolicyError("minuteRequests must be a positive integer");
   }
   return {
-    dailyRequests: candidate.dailyRequests,
-    monthlyRequests: candidate.monthlyRequests,
-    minuteRequests: candidate.minuteRequests,
+    dailyRequests,
+    monthlyRequests,
+    minuteRequests,
   };
 }
 
@@ -152,22 +154,20 @@ function validateCachePolicy(cache: unknown): ProjectPolicy["cache"] {
   if (cache === undefined) {
     return undefined;
   }
-  if (!cache || typeof cache !== "object" || Array.isArray(cache)) {
+  if (!isRecord(cache)) {
     throw buildProjectsPolicyError("cache must be an object");
   }
-  const candidate = cache as {
-    readonly tileTtlSeconds?: unknown;
-    readonly metadataTtlSeconds?: unknown;
-  };
-  if (candidate.tileTtlSeconds !== undefined && !isPositiveInteger(candidate.tileTtlSeconds)) {
+  const tileTtlSeconds = cache.tileTtlSeconds;
+  const metadataTtlSeconds = cache.metadataTtlSeconds;
+  if (tileTtlSeconds !== undefined && !isPositiveInteger(tileTtlSeconds)) {
     throw buildProjectsPolicyError("tileTtlSeconds must be a positive integer");
   }
-  if (candidate.metadataTtlSeconds !== undefined && !isPositiveInteger(candidate.metadataTtlSeconds)) {
+  if (metadataTtlSeconds !== undefined && !isPositiveInteger(metadataTtlSeconds)) {
     throw buildProjectsPolicyError("metadataTtlSeconds must be a positive integer");
   }
   return {
-    tileTtlSeconds: candidate.tileTtlSeconds,
-    metadataTtlSeconds: candidate.metadataTtlSeconds,
+    tileTtlSeconds,
+    metadataTtlSeconds,
   };
 }
 
@@ -175,27 +175,25 @@ function validateAllowedEndpoints(endpoints: unknown): ProjectPolicy["allowedEnd
   if (endpoints === undefined) {
     return defaultPolicy.allowedEndpoints;
   }
-  if (!endpoints || typeof endpoints !== "object" || Array.isArray(endpoints)) {
+  if (!isRecord(endpoints)) {
     throw buildProjectsPolicyError("allowedEndpoints must be an object");
   }
-  const candidate = endpoints as {
-    readonly tiles?: unknown;
-    readonly raster?: unknown;
-    readonly staticMaps?: unknown;
-  };
-  if (candidate.tiles !== undefined && typeof candidate.tiles !== "boolean") {
+  const tiles = endpoints.tiles;
+  const raster = endpoints.raster;
+  const staticMaps = endpoints.staticMaps;
+  if (tiles !== undefined && typeof tiles !== "boolean") {
     throw buildProjectsPolicyError("allowedEndpoints.tiles must be boolean");
   }
-  if (candidate.raster !== undefined && typeof candidate.raster !== "boolean") {
+  if (raster !== undefined && typeof raster !== "boolean") {
     throw buildProjectsPolicyError("allowedEndpoints.raster must be boolean");
   }
-  if (candidate.staticMaps !== undefined && typeof candidate.staticMaps !== "boolean") {
+  if (staticMaps !== undefined && typeof staticMaps !== "boolean") {
     throw buildProjectsPolicyError("allowedEndpoints.staticMaps must be boolean");
   }
   return {
-    tiles: candidate.tiles ?? true,
-    raster: candidate.raster ?? true,
-    staticMaps: candidate.staticMaps ?? true,
+    tiles: tiles ?? true,
+    raster: raster ?? true,
+    staticMaps: staticMaps ?? true,
   };
 }
 

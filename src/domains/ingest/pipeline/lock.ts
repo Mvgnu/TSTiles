@@ -1,12 +1,17 @@
-const lockState = new Map<string, Promise<unknown>>();
+import type { IngestRunReport } from "../types";
 
-export async function withIngestLock<T>(name: string, fn: () => Promise<T>): Promise<T> {
+const lockState = new Map<string, Promise<IngestRunReport>>();
+
+export async function withIngestLock(
+  name: string,
+  fn: () => Promise<IngestRunReport>,
+): Promise<IngestRunReport> {
   const existing = lockState.get(name);
   if (existing) {
-    return existing as Promise<T>;
+    return existing;
   }
 
-  const running = (async (): Promise<T> => {
+  const running = (async (): Promise<IngestRunReport> => {
     try {
       return await fn();
     } finally {

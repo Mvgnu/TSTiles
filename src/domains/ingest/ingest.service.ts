@@ -70,11 +70,11 @@ export async function runIngestPipeline(snapshot: PlanetSnapshot): Promise<Inges
     // Ingestion side effects (artifact registration) are handled by control-plane orchestration.
     runCache.set(snapshotId, report);
     while (runCache.size > maxRunCacheEntries) {
-      const oldestKey = runCache.keys().next().value as string | undefined;
-      if (oldestKey === undefined) {
+      const oldest = runCache.keys().next();
+      if (oldest.done) {
         break;
       }
-      runCache.delete(oldestKey);
+      runCache.delete(oldest.value);
     }
     emitIngestCompletedEvent(report);
     return report;

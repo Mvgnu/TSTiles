@@ -3,6 +3,9 @@ import type { StyleInput, StyleListItem, StyleVersion } from "../styles/types";
 export const enum StudioErrorCode {
   UNAUTHORIZED = "STUDIO_UNAUTHORIZED",
   BAD_REQUEST = "STUDIO_BAD_REQUEST",
+  NOT_FOUND = "STUDIO_NOT_FOUND",
+  CONFLICT = "STUDIO_CONFLICT",
+  DEPENDENCY_FAILED = "STUDIO_DEPENDENCY_FAILED",
 }
 
 export class StudioError extends Error {

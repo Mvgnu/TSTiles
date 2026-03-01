@@ -99,14 +99,14 @@ test("studio rejects invalid style docs on draft save", (): void => {
       sprites: string;
       glyphs: string;
     }, token);
-  }, /STYLE_INVALID_DOCUMENT/);
+  }, /STUDIO_BAD_REQUEST/);
 });
 
-test("studio surfaces missing drafts as STYLE_NOT_FOUND", (): void => {
+test("studio surfaces missing drafts as STUDIO_NOT_FOUND", (): void => {
   const token = "admin-token";
   assert.throws(() => {
     getStyleDraft("missing-style", token);
-  }, /STYLE_NOT_FOUND/);
+  }, /STUDIO_NOT_FOUND/);
 });
 
 test("studio rejects blank identifiers with STUDIO_BAD_REQUEST", (): void => {

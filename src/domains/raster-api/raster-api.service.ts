@@ -86,6 +86,13 @@ function assertHeadEnabled(method: RasterRequest["method"], headEnabled: boolean
   }
 }
 
+function assertRasterMethod(method: string): void {
+  if (method === "GET" || method === "HEAD") {
+    return;
+  }
+  throwRasterApiError(RasterApiErrorCode.BAD_REQUEST);
+}
+
 function assertRasterTileCoordinates(z: number, x: number, y: number): void {
   const maxZoom = 30;
   if (z > maxZoom) {
@@ -128,6 +135,16 @@ function renderTimeoutMs(): number {
   return parsed;
 }
 
+function parseFormat(
+  value: string | undefined,
+  errorCode: RasterApiErrorCode.BAD_COORDINATES | RasterApiErrorCode.STATIC_BAD_REQUEST,
+): "png" | "webp" {
+  if (value === "png" || value === "webp") {
+    return value;
+  }
+  throwRasterApiError(errorCode);
+}
+
 function buildRasterRequest(match: RegExpExecArray, styleId: string): RasterPathMatch {
   const z = toInteger(match[2] ?? "", RasterApiErrorCode.BAD_COORDINATES);
   const x = toInteger(match[3] ?? "", RasterApiErrorCode.BAD_COORDINATES);
@@ -135,7 +152,7 @@ function buildRasterRequest(match: RegExpExecArray, styleId: string): RasterPath
   assertRasterTileCoordinates(z, x, y);
   return {
     styleId,
-    format: (match[5] ?? "png") as "png" | "webp",
+    format: parseFormat(match[5], RasterApiErrorCode.BAD_COORDINATES),
     request: {
       kind: "raster",
       z,
@@ -155,7 +172,7 @@ function buildStaticRequest(match: RegExpExecArray, styleId: string): RasterPath
   assertStaticRequestBounds(zoom, width, height);
   return {
     styleId,
-    format: (match[7] ?? "png") as "png" | "webp",
+    format: parseFormat(match[7], RasterApiErrorCode.STATIC_BAD_REQUEST),
     request: {
       kind: "static",
       lon,
@@ -343,6 +360,7 @@ async function handleRasterRequest(
       throwRasterApiError(expectedKind === "static" ? RasterApiErrorCode.STATIC_BAD_REQUEST : RasterApiErrorCode.BAD_COORDINATES);
     }
     const config = loadConfig();
+    assertRasterMethod(input.method);
     assertHeadEnabled(input.method, config.tileDeliveryPolicy.headEnabled);
     const auth = authorizeTileRequest(asAuthorizeContext(input));
     const cors = buildCorsHeaders(auth, origin);
@@ -431,6 +449,13 @@ async function handleRasterRequest(
         return {
           status: 405,
           body: undefined,
+          headers: errorHeaders,
+        };
+      }
+      if (error.code === RasterApiErrorCode.BAD_REQUEST) {
+        return {
+          status: 400,
+          body: encodeJsonError(RasterApiErrorCode.BAD_REQUEST),
           headers: errorHeaders,
         };
       }

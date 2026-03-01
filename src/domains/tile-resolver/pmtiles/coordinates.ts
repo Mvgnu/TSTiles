@@ -40,8 +40,7 @@ export function validateTileCoordinates(value: unknown): ContractError | null {
   if (!isTileCoordinates(value)) {
     return new ContractError(ContractErrorCode.SCHEMA_INVALID, "RESOLVER_BAD_COORDINATES");
   }
-  const coordinates = value as ParsedTilePath;
-  if (!inTileRange(coordinates.z, coordinates.x, coordinates.y)) {
+  if (!inTileRange(value.z, value.x, value.y)) {
     return new ContractError(ContractErrorCode.SCHEMA_INVALID, "RESOLVER_BAD_COORDINATES");
   }
   return null;

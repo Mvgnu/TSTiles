@@ -66,6 +66,7 @@ Owns `/v1/tiles/{z}/{x}/{y}.mvt` request handling (with optional `/v1` prefix no
 
 ## Error Taxonomy
 
+- `TILE_BAD_REQUEST`
 - `TILE_BAD_COORDINATES`
 - `TILE_NOT_FOUND`
 - `TILE_ARTIFACT_UNAVAILABLE`
