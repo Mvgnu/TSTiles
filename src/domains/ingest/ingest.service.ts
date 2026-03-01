@@ -1,6 +1,5 @@
 import { loadConfig } from "../../config/load-config";
-import { IngestRunReport } from "./types";
-import type { PlanetSnapshot } from "./types";
+import type { IngestRunReport, PlanetSnapshot } from "./types";
 import { IngestError, IngestErrorCode } from "./types";
 import { fetchPlanet } from "./pipeline/fetch-planet";
 import { verifyChecksum } from "./pipeline/verify-checksum";

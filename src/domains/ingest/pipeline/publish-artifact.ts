@@ -1,6 +1,6 @@
 import { createObjectStore } from "../../storage/storage.service";
 import { loadConfig } from "../../../config/load-config";
-import { PMTilesArtifact } from "./convert-to-pmtiles";
+import type { PMTilesArtifact } from "./convert-to-pmtiles";
 
 export async function publishArtifact(
   artifact: PMTilesArtifact,

@@ -38,7 +38,7 @@ const resetConfigEnv = (env: Readonly<Record<string, string | undefined>>): void
   };
   for (const [key, value] of Object.entries(mergedEnv)) {
     if (value === undefined) {
-      delete process.env[key as keyof typeof process.env];
+      Reflect.deleteProperty(process.env, key);
       continue;
     }
     process.env[key as keyof typeof process.env] = value;

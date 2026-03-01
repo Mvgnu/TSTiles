@@ -18,18 +18,15 @@ export async function resolveTileBytes(
   const maxBytes = Math.max(config.tileDeliveryPolicy.maxRangeBytes, 1);
   let hash = 0;
   for (const char of tilePath) {
-    hash = (hash * 31 + char.codePointAt(0)!) % 1_000_000_007;
+    hash = (hash * 31 + (char.codePointAt(0) ?? 0)) % 1_000_000_007;
   }
-  const start = metadata.size > 0 ? hash % metadata.size : 0;
+  const start = hash % metadata.size;
   const end = Math.min(start + maxBytes - 1, metadata.size - 1);
   const result = await store.getRange({
     key: artifactKey,
     start,
     end,
   });
-  if (!result) {
-    throw new TileApiError(TileApiErrorCode.ARTIFACT_UNAVAILABLE);
-  }
   return {
     ...result,
     key: `${artifactKey}:${tilePath}`,

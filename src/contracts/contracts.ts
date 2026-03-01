@@ -1,5 +1,4 @@
 import type {
-  AuthorizeContext,
   AuthorizeResult,
   DenyReason,
   DeliverySignal,

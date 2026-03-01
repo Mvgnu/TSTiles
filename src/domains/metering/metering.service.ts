@@ -436,7 +436,15 @@ export function getUsageSummary(projectId: string, window: UsageCounterWindow): 
 }
 
 function resolveBillingPlan(planId: string): BillingPlan {
-  return billingPlansById.get(planId.toLowerCase()) ?? billingPlansById.get("free")!;
+  const matched = billingPlansById.get(planId.toLowerCase());
+  if (matched) {
+    return matched;
+  }
+  const fallback = billingPlansById.get("free");
+  if (fallback) {
+    return fallback;
+  }
+  throwMeteringError(MeteringErrorCode.BAD_IDENTITY, "free billing plan is missing");
 }
 
 export function computeBillingEstimate(summary: UsageSummary | UsageSummary[], plan?: BillingPlan): BillingEstimate {

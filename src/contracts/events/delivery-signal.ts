@@ -10,37 +10,40 @@ function isHttpMethod(value: unknown): value is HttpMethod {
   return value === "GET" || value === "HEAD" || value === "OPTIONS";
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function isDeliverySignalPayload(value: unknown): value is DeliverySignal {
-  if (!value || typeof value !== "object") {
+  if (!isRecord(value)) {
     return false;
   }
-  const candidate = value as Record<string, unknown>;
   if (
-    typeof candidate.schemaVersion !== "number" ||
-    typeof candidate.artifactVersion !== "string" ||
-    candidate.artifactVersion.length === 0 ||
-    typeof candidate.tilePath !== "string" ||
-    candidate.tilePath.length === 0 ||
-    !candidate.tilePath.startsWith("/") ||
-    (candidate.cacheStatus !== "hit" && candidate.cacheStatus !== "miss") ||
-    typeof candidate.originRead !== "boolean" ||
-    typeof candidate.responseBytes !== "number" ||
-    !Number.isFinite(candidate.responseBytes) ||
-    !Number.isInteger(candidate.responseBytes) ||
-    candidate.responseBytes < 0 ||
-    typeof candidate.latencyMs !== "number" ||
-    !Number.isFinite(candidate.latencyMs) ||
-    !Number.isInteger(candidate.latencyMs) ||
-    candidate.latencyMs < 0 ||
-    typeof candidate.statusCode !== "number" ||
-    !Number.isFinite(candidate.statusCode) ||
-    !Number.isInteger(candidate.statusCode) ||
-    candidate.statusCode < 100 ||
-    candidate.statusCode > 599 ||
-    typeof candidate.receivedAt !== "string" ||
-    candidate.receivedAt.length === 0 ||
-    Number.isNaN(Date.parse(candidate.receivedAt)) ||
-    !isHttpMethod(candidate.normalizedMethod)
+    typeof value.schemaVersion !== "number" ||
+    typeof value.artifactVersion !== "string" ||
+    value.artifactVersion.length === 0 ||
+    typeof value.tilePath !== "string" ||
+    value.tilePath.length === 0 ||
+    !value.tilePath.startsWith("/") ||
+    (value.cacheStatus !== "hit" && value.cacheStatus !== "miss") ||
+    typeof value.originRead !== "boolean" ||
+    typeof value.responseBytes !== "number" ||
+    !Number.isFinite(value.responseBytes) ||
+    !Number.isInteger(value.responseBytes) ||
+    value.responseBytes < 0 ||
+    typeof value.latencyMs !== "number" ||
+    !Number.isFinite(value.latencyMs) ||
+    !Number.isInteger(value.latencyMs) ||
+    value.latencyMs < 0 ||
+    typeof value.statusCode !== "number" ||
+    !Number.isFinite(value.statusCode) ||
+    !Number.isInteger(value.statusCode) ||
+    value.statusCode < 100 ||
+    value.statusCode > 599 ||
+    typeof value.receivedAt !== "string" ||
+    value.receivedAt.length === 0 ||
+    Number.isNaN(Date.parse(value.receivedAt)) ||
+    !isHttpMethod(value.normalizedMethod)
   ) {
     return false;
   }

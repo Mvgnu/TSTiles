@@ -33,6 +33,111 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function parseProjectPolicyInput(policy: unknown): Partial<ProjectPolicy> | undefined {
+  if (policy === undefined) {
+    return undefined;
+  }
+  if (!isRecord(policy)) {
+    throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "policy must be an object");
+  }
+
+  let allowedOrigins: readonly string[] | undefined;
+  if (policy.allowedOrigins !== undefined) {
+    if (!Array.isArray(policy.allowedOrigins)) {
+      throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "policy.allowedOrigins must be an array");
+    }
+    const origins: string[] = [];
+    for (const entry of policy.allowedOrigins) {
+      if (typeof entry !== "string" || entry.trim().length === 0) {
+        throw new ControlPlaneError(
+          ControlPlaneErrorCode.BAD_REQUEST,
+          "policy.allowedOrigins entries must be non-empty strings",
+        );
+      }
+      origins.push(entry.trim());
+    }
+    allowedOrigins = origins;
+  }
+
+  let allowedEndpoints: ProjectPolicy["allowedEndpoints"] | undefined;
+  if (policy.allowedEndpoints !== undefined) {
+    if (!isRecord(policy.allowedEndpoints)) {
+      throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "policy.allowedEndpoints must be an object");
+    }
+    const tiles = policy.allowedEndpoints.tiles;
+    const raster = policy.allowedEndpoints.raster;
+    const staticMaps = policy.allowedEndpoints.staticMaps;
+    if (tiles !== undefined && typeof tiles !== "boolean") {
+      throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "policy.allowedEndpoints.tiles must be boolean");
+    }
+    if (raster !== undefined && typeof raster !== "boolean") {
+      throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "policy.allowedEndpoints.raster must be boolean");
+    }
+    if (staticMaps !== undefined && typeof staticMaps !== "boolean") {
+      throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "policy.allowedEndpoints.staticMaps must be boolean");
+    }
+    allowedEndpoints = {
+      tiles: tiles ?? true,
+      raster: raster ?? true,
+      staticMaps: staticMaps ?? true,
+    };
+  }
+
+  let quotas: ProjectPolicy["quotas"] | undefined;
+  if (policy.quotas !== undefined) {
+    if (!isRecord(policy.quotas)) {
+      throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "policy.quotas must be an object");
+    }
+    const dailyRequests = policy.quotas.dailyRequests;
+    const monthlyRequests = policy.quotas.monthlyRequests;
+    const minuteRequests = policy.quotas.minuteRequests;
+    if (dailyRequests !== undefined && !isPositiveInteger(dailyRequests)) {
+      throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "policy.quotas.dailyRequests must be a positive integer");
+    }
+    if (monthlyRequests !== undefined && !isPositiveInteger(monthlyRequests)) {
+      throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "policy.quotas.monthlyRequests must be a positive integer");
+    }
+    if (minuteRequests !== undefined && !isPositiveInteger(minuteRequests)) {
+      throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "policy.quotas.minuteRequests must be a positive integer");
+    }
+    quotas = {
+      dailyRequests,
+      monthlyRequests,
+      minuteRequests,
+    };
+  }
+
+  let cache: ProjectPolicy["cache"] | undefined;
+  if (policy.cache !== undefined) {
+    if (!isRecord(policy.cache)) {
+      throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "policy.cache must be an object");
+    }
+    const tileTtlSeconds = policy.cache.tileTtlSeconds;
+    const metadataTtlSeconds = policy.cache.metadataTtlSeconds;
+    if (tileTtlSeconds !== undefined && !isPositiveInteger(tileTtlSeconds)) {
+      throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "policy.cache.tileTtlSeconds must be a positive integer");
+    }
+    if (metadataTtlSeconds !== undefined && !isPositiveInteger(metadataTtlSeconds)) {
+      throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "policy.cache.metadataTtlSeconds must be a positive integer");
+    }
+    cache = {
+      tileTtlSeconds,
+      metadataTtlSeconds,
+    };
+  }
+
+  return {
+    ...(allowedOrigins === undefined ? {} : { allowedOrigins }),
+    ...(allowedEndpoints === undefined ? {} : { allowedEndpoints }),
+    ...(quotas === undefined ? {} : { quotas }),
+    ...(cache === undefined ? {} : { cache }),
+  };
+}
+
 function normalizeErrorMessage(error: unknown): string {
   if (error instanceof Error && isRecord(error)) {
     const code = error.code;
@@ -125,17 +230,11 @@ function parseCreateProjectInput(input: unknown): ProjectCreationInput {
   if (planId !== undefined && typeof planId !== "string") {
     throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "planId must be a string");
   }
-  const policy = input.policy;
-  if (
-    policy !== undefined
-    && !isRecord(policy)
-  ) {
-    throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "policy must be an object");
-  }
+  const policy = parseProjectPolicyInput(input.policy);
   return {
     name: name.trim(),
     planId,
-    policy: policy as Partial<ProjectPolicy> | undefined,
+    policy,
   };
 }
 

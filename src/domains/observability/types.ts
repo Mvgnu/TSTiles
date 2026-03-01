@@ -1,5 +1,3 @@
-import type { DeliverySignal } from "../../contracts/types";
-
 export const enum ObservabilityErrorCode {
   SIGNAL_SCHEMA_INVALID = "OBS_SIGNAL_SCHEMA_INVALID",
   SLO_THRESHOLD_MISCONFIGURED = "OBS_SLO_THRESHOLD_MISCONFIGURED",

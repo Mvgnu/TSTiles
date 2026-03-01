@@ -98,17 +98,17 @@ test("storage service writes, reads, and enforces constraints", async (): Promis
     assert.fail("expected missing object to fail with redacted key");
   } catch (error: unknown) {
     assert.equal((error as { code?: string }).code, StorageErrorCode.NOT_FOUND);
-    const key = (error as { key?: string }).key ?? "";
-    assert.equal(key.includes("secret"), false);
-    assert.equal(/[?&]x-amz-signature=sig(?:&|$)/i.test(key), false);
-    assert.equal(/[?&]credential=cred(?:&|$)/i.test(key), false);
-    assert.equal(/[?&]x-amz-security-token=sst(?:&|$)/i.test(key), false);
-    assert.equal(key.includes("access_token=[redacted]"), true);
-    assert.equal(key.includes("x-amz-signature=[redacted]"), true);
-    assert.equal(key.includes("credential=[redacted]"), true);
-    assert.equal(key.includes("x-amz-security-token=[redacted]"), true);
-    assert.equal(key.includes("fragment-secret"), false);
-    assert.equal(key.includes("#[redacted]"), true);
+    const redactedKey = (error as { key?: string }).key ?? "";
+    assert.equal(redactedKey.includes("secret"), false);
+    assert.equal(/[?&]x-amz-signature=sig(?:&|$)/i.test(redactedKey), false);
+    assert.equal(/[?&]credential=cred(?:&|$)/i.test(redactedKey), false);
+    assert.equal(/[?&]x-amz-security-token=sst(?:&|$)/i.test(redactedKey), false);
+    assert.equal(redactedKey.includes("access_token=[redacted]"), true);
+    assert.equal(redactedKey.includes("x-amz-signature=[redacted]"), true);
+    assert.equal(redactedKey.includes("credential=[redacted]"), true);
+    assert.equal(redactedKey.includes("x-amz-security-token=[redacted]"), true);
+    assert.equal(redactedKey.includes("fragment-secret"), false);
+    assert.equal(redactedKey.includes("#[redacted]"), true);
   }
 
   try {

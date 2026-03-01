@@ -16,6 +16,10 @@ export interface RuntimeSchemaInput {
   readonly ingestDefaults: IngestDefaults;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function normalizeRuntimeConfig(input: RuntimeSchemaInput): RuntimeSchemaInput {
   return {
     environment: input.environment,
@@ -28,13 +32,14 @@ export function normalizeRuntimeConfig(input: RuntimeSchemaInput): RuntimeSchema
 }
 
 export function isRuntimeConfig(input: unknown): input is RuntimeConfig {
+  if (!isRecord(input)) {
+    return false;
+  }
   return (
-    !!input &&
-    typeof input === "object" &&
-    typeof (input as RuntimeConfig).storage === "object" &&
-    typeof (input as RuntimeConfig).security === "object" &&
-    typeof (input as RuntimeConfig).tileDeliveryPolicy === "object" &&
-    typeof (input as RuntimeConfig).observability === "object" &&
-    typeof (input as RuntimeConfig).environment === "string"
+    isRecord(input.storage) &&
+    isRecord(input.security) &&
+    isRecord(input.tileDeliveryPolicy) &&
+    isRecord(input.observability) &&
+    typeof input.environment === "string"
   );
 }

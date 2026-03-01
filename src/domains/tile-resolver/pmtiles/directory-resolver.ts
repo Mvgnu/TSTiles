@@ -14,9 +14,9 @@ export function resolveTileByteRange(path: string, metadataSize: number, maxRang
   }
   let hashSeed = 0;
   for (const codePoint of path) {
-    hashSeed = (hashSeed * 31 + codePoint.codePointAt(0)!) % maxTileHash;
+    hashSeed = (hashSeed * 31 + (codePoint.codePointAt(0) ?? 0)) % maxTileHash;
   }
-  const start = metadataSize > 0 ? hashSeed % metadataSize : 0;
+  const start = hashSeed % metadataSize;
   const end = Math.min(start + safeRange - 1, metadataSize - 1);
   return { start, end };
 }

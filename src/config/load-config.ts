@@ -3,6 +3,31 @@ import { parseSecurityConfig } from "./schema/security-schema";
 import { parseObservabilityConfig } from "./schema/observability-schema";
 import { normalizeRuntimeConfig } from "./schema/runtime-schema";
 
+function parseEnvironment(value: string | undefined): RuntimeConfig["environment"] {
+  const normalized = value?.trim();
+  if (normalized === undefined || normalized.length === 0) {
+    return "development";
+  }
+  if (normalized === "development" || normalized === "staging" || normalized === "production") {
+    return normalized;
+  }
+  throw new ConfigError(ConfigErrorCode.INVALID_VALUE, "Invalid NODE_ENV", normalized);
+}
+
+function parseStorageMode(
+  value: string | undefined,
+  environment: RuntimeConfig["environment"],
+): RuntimeConfig["storage"]["mode"] {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === undefined || normalized.length === 0) {
+    return environment === "development" ? "memory" : "s3-compatible";
+  }
+  if (normalized === "memory" || normalized === "s3-compatible") {
+    return normalized;
+  }
+  throw new ConfigError(ConfigErrorCode.INVALID_VALUE, "Invalid object store mode", normalized);
+}
+
 function parsePositiveInteger(value: string | undefined, fallback: number, label: string): number {
   if (value === undefined) {
     return fallback;
@@ -52,16 +77,8 @@ function parseOptionalSha256(value: string | undefined, label: string): string |
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): RuntimeConfig {
-  const environment = (env.NODE_ENV?.trim() ?? "development") as RuntimeConfig["environment"];
-  if (environment !== "development" && environment !== "staging" && environment !== "production") {
-    throw new ConfigError(ConfigErrorCode.INVALID_VALUE, "Invalid NODE_ENV", environment);
-  }
-  const normalizedMode = env.OBJECT_STORE_MODE?.trim().toLowerCase();
-  const mode = (normalizedMode as RuntimeConfig["storage"]["mode"] | undefined)
-    ?? (environment === "development" ? "memory" : "s3-compatible");
-  if (mode !== "memory" && mode !== "s3-compatible") {
-    throw new ConfigError(ConfigErrorCode.INVALID_VALUE, "Invalid object store mode", mode);
-  }
+  const environment = parseEnvironment(env.NODE_ENV);
+  const mode = parseStorageMode(env.OBJECT_STORE_MODE, environment);
 
   const bucketName = env.OBJECT_STORE_BUCKET?.trim();
   if (!bucketName) {
