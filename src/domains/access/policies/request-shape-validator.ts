@@ -2,7 +2,7 @@ import type { HttpMethod } from "../../../contracts/types";
 
 const tilePathPattern = /^\/(?:v1\/)?tiles\/(\d+)\/(\d+)\/(\d+)\.mvt$/;
 const rasterPathPattern = /^\/(?:v1\/)?raster\/([^/]+)\/(\d+)\/(\d+)\/(\d+)\.(?:png|webp)$/;
-const staticPathPattern = /^\/(?:v1\/)?static\/([^/]+)\/-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?,(\d+(?:\.\d+)?)\/([1-9]\d*)x([1-9]\d*)\.(?:png|webp)$/;
+const staticPathPattern = /^\/(?:v1\/)?static\/([^/]+)\/(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(\d+(?:\.\d+)?)\/([1-9]\d*)x([1-9]\d*)\.(?:png|webp)$/;
 const metadataPath = "/tiles/metadata";
 const metadataPathV1 = "/v1/tiles/metadata";
 const maxStaticDimension = 4096;
@@ -74,9 +74,17 @@ export function isValidRequestPath(path: string): boolean {
     if (!isValidDecodedStyleId(staticMatch[1])) {
       return false;
     }
-    const zoom = Number(staticMatch[2] ?? "");
-    const width = Number(staticMatch[3] ?? "");
-    const height = Number(staticMatch[4] ?? "");
+    const lon = Number(staticMatch[2] ?? "");
+    const lat = Number(staticMatch[3] ?? "");
+    const zoom = Number(staticMatch[4] ?? "");
+    const width = Number(staticMatch[5] ?? "");
+    const height = Number(staticMatch[6] ?? "");
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) {
+      return false;
+    }
+    if (lon < -180 || lon > 180 || lat < -90 || lat > 90) {
+      return false;
+    }
     if (!Number.isFinite(zoom) || zoom > maxStaticZoom) {
       return false;
     }

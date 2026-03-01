@@ -13,6 +13,8 @@ import { loadConfig } from "../../config/load-config";
 
 const windows = new Map<string, TileTrafficWindow>();
 const WINDOW_MS = 15 * 60 * 1000;
+const WINDOW_RETENTION_COUNT = 3;
+const MAX_FUTURE_SKEW_MS = WINDOW_MS;
 
 function normalizeSignalPath(path: string): string {
   const [withoutQuery] = path.split("?");
@@ -40,9 +42,13 @@ function buildEndpointGroup(path: string): string {
   return normalizedPath;
 }
 
-function bucketWindowStart(signal: DeliverySignal): number {
+function bucketWindowStart(signal: DeliverySignal, nowMs: number): number {
   const received = Date.parse(signal.receivedAt);
-  const timestamp = Number.isNaN(received) ? Date.now() : received;
+  const lowerBound = nowMs - WINDOW_MS * WINDOW_RETENTION_COUNT;
+  const upperBound = nowMs + MAX_FUTURE_SKEW_MS;
+  const timestamp = Number.isNaN(received)
+    ? nowMs
+    : Math.min(Math.max(received, lowerBound), upperBound);
   return Math.floor(timestamp / WINDOW_MS) * WINDOW_MS;
 }
 
@@ -54,8 +60,9 @@ function isSLOWindowNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
-function purgeExpiredWindows(referenceWindowStart: number): void {
-  const cutoff = referenceWindowStart - WINDOW_MS * 3;
+function purgeExpiredWindows(nowMs: number): void {
+  const currentWindowStart = Math.floor(nowMs / WINDOW_MS) * WINDOW_MS;
+  const cutoff = currentWindowStart - WINDOW_MS * WINDOW_RETENTION_COUNT;
   for (const [key, window] of windows.entries()) {
     if (window.windowStart < cutoff) {
       windows.delete(key);
@@ -177,8 +184,9 @@ export function evaluateTileSLOs(signal: DeliverySignal): CacheHealthSignal {
   validatePolicy(policy);
   validatePolicy(config.observability);
   const endpointGroup = buildEndpointGroup(validated.tilePath);
-  const windowStart = bucketWindowStart(validated);
-  purgeExpiredWindows(windowStart);
+  const now = Date.now();
+  const windowStart = bucketWindowStart(validated, now);
+  purgeExpiredWindows(now);
   const key = computeKey(validated, endpointGroup, windowStart);
   const existing = windows.get(key);
   const previous = existing ?? {
@@ -192,7 +200,6 @@ export function evaluateTileSLOs(signal: DeliverySignal): CacheHealthSignal {
     durationMs: 0,
   };
 
-  const now = Date.now();
   const next: TileTrafficWindow = {
     ...previous,
     totalRequests: previous.totalRequests + 1,

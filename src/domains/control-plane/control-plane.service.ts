@@ -92,6 +92,12 @@ function addJob(job: JobMetadata): void {
   if (jobHistory.length > JOB_RETENTION) {
     jobHistory.length = JOB_RETENTION;
   }
+  const retainedJobIds = new Set(jobHistory.map((entry) => entry.jobId));
+  for (const jobId of recentJobs.keys()) {
+    if (!retainedJobIds.has(jobId)) {
+      recentJobs.delete(jobId);
+    }
+  }
 }
 
 function normalizeRequiredId(value: string, label: string): string {

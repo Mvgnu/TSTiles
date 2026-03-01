@@ -48,6 +48,17 @@ export function authorizeTileRequest(input: AuthorizeContext): AuthorizeResult {
   if (projectPolicy && !isEndpointAllowed(projectPolicy, endpointGroup)) {
     return deny("ACCESS_UNAUTHORIZED");
   }
+  let rateLimitRemaining: number | undefined;
+  if (config.security.enableRateLimit) {
+    const rateLimit = checkRateLimit(
+      input.clientIp ?? projectIdentity.keyId,
+      config.security.rateLimitMaxRequestsPerMinute,
+    );
+    if (!rateLimit.allowed) {
+      return deny("ACCESS_RATE_LIMITED");
+    }
+    rateLimitRemaining = rateLimit.remaining;
+  }
   const quota = consumeRequestUnit({
     projectId: projectIdentity.projectId,
     keyHash: projectIdentity.keyHash,
@@ -62,24 +73,10 @@ export function authorizeTileRequest(input: AuthorizeContext): AuthorizeResult {
       allowedOrigins,
     };
   }
-  if (config.security.enableRateLimit) {
-    const rateLimit = checkRateLimit(
-      input.clientIp ?? projectIdentity.keyId,
-      config.security.rateLimitMaxRequestsPerMinute,
-    );
-    if (!rateLimit.allowed) {
-      return deny("ACCESS_RATE_LIMITED");
-    }
-    return {
-      allow: true,
-      sanitizedIdentity: resolvedIdentity,
-      rateLimitRemaining: rateLimit.remaining,
-      allowedOrigins,
-    };
-  }
   return {
     allow: true,
     sanitizedIdentity: resolvedIdentity,
+    rateLimitRemaining,
     allowedOrigins,
   };
 }

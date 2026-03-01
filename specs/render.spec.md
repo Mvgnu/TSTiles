@@ -16,7 +16,6 @@ consumes:
   - styles.getStyle
   - tile_resolver.resolveVectorTile
   - config.RuntimeConfig
-  - contracts.ContractError
 verification:
   typecheck: "npx tsc --noEmit"
   test: "vitest run src/domains/render/__tests__/ --globals --passWithNoTests"
@@ -44,6 +43,7 @@ Owns raster tile and static image rendering, isolated from vector hot-path deliv
 - Renderer accepts style IDs/versions, not arbitrary user style JSON.
 - Render output cache keys include style version and artifact identity.
 - Renderer backend is pluggable (`remote` first, `local-native` later).
+- Static map lon/lat conversion keeps `lon=180` on the east-edge tile boundary.
 
 ## Error Taxonomy
 
@@ -54,5 +54,5 @@ Owns raster tile and static image rendering, isolated from vector hot-path deliv
 
 ## Dependency Direction
 
-- May depend on `styles`, `tile_resolver`, `config`, and `contracts`.
+- May depend on `styles`, `tile_resolver`, and `config`.
 - Must not depend on HTTP routing domains (`tile_api`, `raster_api`).

@@ -272,7 +272,7 @@ export async function handleTileRequest(input: TileRequest): Promise<TileRespons
     if (message === "HEAD_DISABLED") {
       return {
         status: 405,
-        body: encodeJsonError("HEAD_DISABLED"),
+        body: undefined,
         headers: errorHeaders,
       };
     }
@@ -322,7 +322,7 @@ export async function handleMetadataRequest(input: TileRequest): Promise<TileMet
     if (input.method === "HEAD" && !config.tileDeliveryPolicy.headEnabled) {
       return {
         status: 405,
-        body: JSON.stringify({ error: "HEAD_DISABLED" }),
+        body: undefined,
         headers: errorHeaders,
       };
     }
@@ -466,7 +466,7 @@ export async function handleHealthRequest(input: TileRequest): Promise<TileRespo
     if (input.method === "HEAD" && !config.tileDeliveryPolicy.headEnabled) {
       return {
         status: 405,
-        body: encodeJsonError("HEAD_DISABLED"),
+        body: undefined,
         headers: {
           "content-type": "application/json",
           "cache-control": "no-store",

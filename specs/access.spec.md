@@ -46,10 +46,12 @@ Owns request validation before vector/raster/static bytes are served.
 - Inputs include method, path, normalized query, headers, client metadata.
 - Outputs include `allow`, `denyReason`, and sanitized identity (`projectId:keyIdHash` fragment or `"anon"` fallback).
 - Validates request shape for `tiles`, `raster`, and `static` request families.
+  Static map shape validation includes geographic bounds for lon/lat inputs.
 
 ## Owned Invariants
 
 - Auth and quota are evaluated before any cache lookup and before any object-store read.
+- Security rate-limit checks execute before quota consumption so throttled requests do not burn quota.
 - Access owns CORS policy calculation; downstream domains must not override policy.
 - CORS policy is derived from resolved project policy when `allowedOrigins` is configured, with global config as fallback.
 - Access never logs raw API keys or raw token values.

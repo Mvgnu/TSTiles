@@ -85,6 +85,7 @@ Owns protected operational actions and diagnostics for administrators.
 - Mutating operations are auditable and idempotent where feasible.
 - Health endpoints never expose sensitive configuration details.
 - Admin-only project key operations never return raw key material after initial issuance.
+- In-memory job/audit telemetry uses bounded retention to avoid unbounded process memory growth.
 
 ## Error Taxonomy
 

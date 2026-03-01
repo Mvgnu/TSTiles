@@ -18,8 +18,6 @@ exports:
   - getUsageSummary
   - computeBillingEstimate
 consumes:
-  - config.RuntimeConfig
-  - config.SecurityConfig
   - contracts.DeliverySignal
   - projects.ProjectPolicy
 verification:
@@ -67,5 +65,5 @@ Owns usage accounting and quota gating before cache/origin reads.
 
 ## Dependency Direction
 
-- May depend on `config`, `contracts`, and `projects`.
+- May depend on `contracts` and `projects`.
 - Must not depend on request routing domains.

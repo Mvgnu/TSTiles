@@ -78,6 +78,7 @@ test("raster and static routes resolve and enforce request semantics", async ():
     },
   });
   assert.equal(rasterHeadDisabled.status, 405);
+  assert.equal(rasterHeadDisabled.body, undefined);
   assert.equal(rasterHeadDisabled.headers["cache-control"], "no-store");
 
   const staticHeadDisabled = await handleStaticMapRequest({
@@ -89,6 +90,7 @@ test("raster and static routes resolve and enforce request semantics", async ():
     },
   });
   assert.equal(staticHeadDisabled.status, 405);
+  assert.equal(staticHeadDisabled.body, undefined);
   assert.equal(staticHeadDisabled.headers["cache-control"], "no-store");
 
   process.env.HEAD_ENABLED = "true";
@@ -268,6 +270,36 @@ test("raster and static routes resolve and enforce request semantics", async ():
   });
   assert.equal(staticMapDecimalZoom.status, 200);
   assert.equal(typeof staticMapDecimalZoom.headers["x-raster-cache-key"], "string");
+
+  const staticLatOutOfRange = await handleStaticMapRequest({
+    method: "GET",
+    path: "/v1/static/basic/-122.4194,97.7749,12/640x480.webp",
+    headers: {
+      origin: "https://example.com",
+      authorization: "tile-token",
+    },
+  });
+  assert.equal(staticLatOutOfRange.status, 400);
+  assert.equal(staticLatOutOfRange.headers["cache-control"], "no-store");
+  if (staticLatOutOfRange.body !== undefined) {
+    const payload = JSON.parse(new TextDecoder().decode(staticLatOutOfRange.body)) as { error?: string };
+    assert.equal(payload.error, "STATIC_BAD_REQUEST");
+  }
+
+  const staticLonOutOfRange = await handleStaticMapRequest({
+    method: "GET",
+    path: "/v1/static/basic/-222.4194,37.7749,12/640x480.webp",
+    headers: {
+      origin: "https://example.com",
+      authorization: "tile-token",
+    },
+  });
+  assert.equal(staticLonOutOfRange.status, 400);
+  assert.equal(staticLonOutOfRange.headers["cache-control"], "no-store");
+  if (staticLonOutOfRange.body !== undefined) {
+    const payload = JSON.parse(new TextDecoder().decode(staticLonOutOfRange.body)) as { error?: string };
+    assert.equal(payload.error, "STATIC_BAD_REQUEST");
+  }
 
   const staticBlankStyleId = await handleStaticMapRequest({
     method: "GET",

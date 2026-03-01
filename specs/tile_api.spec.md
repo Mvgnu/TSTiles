@@ -59,6 +59,7 @@ Owns `/v1/tiles/{z}/{x}/{y}.mvt` request handling (with optional `/v1` prefix no
 - Tile/metadata byte resolution is delegated to `tile_resolver`.
 - OPTIONS requests are short-circuited for valid tile/metadata paths and do not require token auth.
 - `HEAD` responses are only served when `HEAD_ENABLED=true`; if disabled, handler returns `405` with `HEAD_DISABLED`.
+  `HEAD_DISABLED` responses for HEAD requests are body-less.
 
 ## Error Taxonomy
 

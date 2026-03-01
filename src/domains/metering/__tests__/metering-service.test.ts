@@ -29,6 +29,17 @@ function makeProjectWithPolicy(policy?: Parameters<typeof createProject>[0]["pol
   });
 }
 
+function withFrozenTime<T>(isoTimestamp: string, fn: () => T): T {
+  const fixedTimeMs = new Date(isoTimestamp).getTime();
+  const previousNow = Date.now;
+  Date.now = () => fixedTimeMs;
+  try {
+    return fn();
+  } finally {
+    Date.now = previousNow;
+  }
+}
+
 test("consumeRequestUnit allows and tracks usage", () => {
   const project = makeProjectWithPolicy({
     quotas: {
@@ -162,6 +173,68 @@ test("consumeRequestUnit reports rate limit when minute quota is exceeded", () =
   assert.equal(second.allow, false);
   assert.equal(second.denyReason, "rate_limit");
   assert.equal(second.limit, 1);
+});
+
+test("consumeRequestUnit reports nearest quota window when multiple limits are configured", () => {
+  const project = makeProjectWithPolicy({
+    quotas: {
+      minuteRequests: 2,
+      dailyRequests: 100,
+      monthlyRequests: 1000,
+    },
+  });
+  const key = rotateApiKey(project.id);
+  const identity = {
+    projectId: key.projectId,
+    keyHash: key.keyHash,
+    planId: project.planId,
+  };
+
+  const first = consumeRequestUnit(identity, "tiles");
+  const second = consumeRequestUnit(identity, "tiles");
+  const third = consumeRequestUnit(identity, "tiles");
+
+  assert.equal(first.allow, true);
+  assert.equal(first.limit, 2);
+  assert.equal(first.remaining, 1);
+  assert.equal(second.allow, true);
+  assert.equal(second.limit, 2);
+  assert.equal(second.remaining, 0);
+  assert.equal(third.allow, false);
+  assert.equal(third.denyReason, "rate_limit");
+  assert.equal(third.limit, 2);
+});
+
+test("getUsageSummary evicts stale buckets outside retention windows", () => {
+  const project = makeProjectWithPolicy({
+    quotas: {
+      monthlyRequests: 10,
+    },
+  });
+  const key = rotateApiKey(project.id);
+  const identity = {
+    projectId: key.projectId,
+    keyHash: key.keyHash,
+    planId: project.planId,
+  };
+  const oldTimestamp = "2024-01-01T00:00:00.000Z";
+
+  withFrozenTime(oldTimestamp, () => {
+    const consumed = consumeRequestUnit(identity, "tiles");
+    assert.equal(consumed.allow, true);
+    const oldSummary = getUsageSummary(project.id, "minute");
+    assert.equal(oldSummary.length, 1);
+  });
+
+  withFrozenTime("2026-03-01T00:00:00.000Z", () => {
+    const currentSummary = getUsageSummary(project.id, "minute");
+    assert.equal(currentSummary.length, 0);
+  });
+
+  withFrozenTime(oldTimestamp, () => {
+    const oldSummaryAfterCleanup = getUsageSummary(project.id, "minute");
+    assert.equal(oldSummaryAfterCleanup.length, 0);
+  });
 });
 
 test("consumeRequestUnit rejects endpoints blocked by policy", () => {

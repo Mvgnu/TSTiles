@@ -102,6 +102,12 @@ function assertStaticRequestBounds(zoom: number, width: number, height: number):
   }
 }
 
+function assertStaticCoordinates(lon: number, lat: number): void {
+  if (lon < -180 || lon > 180 || lat < -90 || lat > 90) {
+    throw new Error("STATIC_BAD_REQUEST");
+  }
+}
+
 function mapDenyStatus(reason?: string): number {
   return reason === "ACCESS_RATE_LIMITED" || reason === "ACCESS_QUOTA_EXCEEDED" ? 429 : reason === "ACCESS_ORIGIN_DENIED" ? 403 : reason === "ACCESS_UNAUTHORIZED" ? 401 : 400;
 }
@@ -151,14 +157,17 @@ function parseRasterPath(path: string): RasterPathMatch {
         styleId,
         format: (match[7] ?? "png") as "png" | "webp",
         request: (() => {
+          const lon = toNumber(match[2] ?? "");
+          const lat = toNumber(match[3] ?? "");
           const zoom = toNumber(match[4] ?? "");
           const width = toInteger(match[5] ?? "");
           const height = toInteger(match[6] ?? "");
+          assertStaticCoordinates(lon, lat);
           assertStaticRequestBounds(zoom, width, height);
           return {
             kind: "static" as const,
-            lon: toNumber(match[2] ?? ""),
-            lat: toNumber(match[3] ?? ""),
+            lon,
+            lat,
             zoom,
             width,
             height,
@@ -343,7 +352,7 @@ async function handleRasterRequest(
     if ((error as Error).message === "HEAD_DISABLED") {
       return {
         status: 405,
-        body: encodeJsonError("HEAD_DISABLED"),
+        body: undefined,
         headers: errorHeaders,
       };
     }

@@ -24,10 +24,7 @@ exports:
   - publishStyleVersion
   - resolveStyleAssets
 consumes:
-  - storage
   - config.RuntimeConfig
-  - contracts.ContractError
-  - artifact.listArtifacts
 verification:
   typecheck: "npx tsc --noEmit"
   test: "vitest run src/domains/styles/__tests__/ --globals --passWithNoTests"
@@ -80,5 +77,5 @@ Style seed inputs may come from object-store keys (production/staging) or local 
 
 ## Dependency Direction
 
-- May depend on `storage`, `config`, `contracts`, and optionally `artifact`.
+- May depend on `config`.
 - Must not depend on `tile_api`, `raster_api`, or `access`.

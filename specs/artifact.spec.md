@@ -54,6 +54,7 @@ Owns artifact metadata, active version selection, and safe promotion or rollback
 - Active pointer updates are atomic.
 - Only validated artifacts can be promoted.
 - Active artifact is never deleted by retention jobs.
+- Rollback history is bounded to prevent unbounded in-memory growth.
 
 ## Error Taxonomy
 

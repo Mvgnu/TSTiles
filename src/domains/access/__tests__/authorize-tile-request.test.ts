@@ -152,6 +152,24 @@ test("authorize tile request policy", () => {
       authorization: "tile-token",
     },
   });
+  const invalidStaticLatitude = authorizeTileRequest({
+    method: "GET",
+    path: "/v1/static/basic/-122.4194,97.7749,12/640x480.png",
+    query: {},
+    headers: {
+      origin: "https://example.com",
+      authorization: "tile-token",
+    },
+  });
+  const invalidStaticLongitude = authorizeTileRequest({
+    method: "GET",
+    path: "/v1/static/basic/-222.4194,37.7749,12/640x480.png",
+    query: {},
+    headers: {
+      origin: "https://example.com",
+      authorization: "tile-token",
+    },
+  });
   const invalidTileOutOfRange = authorizeTileRequest({
     method: "GET",
     path: "/v1/tiles/1/2/0.mvt",
@@ -239,6 +257,10 @@ test("authorize tile request policy", () => {
   assert.equal(oversizedStaticDimensions.denyReason, "ACCESS_BAD_REQUEST");
   assert.equal(excessiveStaticZoom.allow, false);
   assert.equal(excessiveStaticZoom.denyReason, "ACCESS_BAD_REQUEST");
+  assert.equal(invalidStaticLatitude.allow, false);
+  assert.equal(invalidStaticLatitude.denyReason, "ACCESS_BAD_REQUEST");
+  assert.equal(invalidStaticLongitude.allow, false);
+  assert.equal(invalidStaticLongitude.denyReason, "ACCESS_BAD_REQUEST");
   assert.equal(invalidTileOutOfRange.allow, false);
   assert.equal(invalidTileOutOfRange.denyReason, "ACCESS_BAD_REQUEST");
   assert.equal(invalidTileZoom.allow, false);
@@ -361,10 +383,16 @@ test("authorize tile request policy", () => {
         raster: boolean;
         staticMaps: boolean;
       };
+      quotas?: {
+        dailyRequests?: number;
+        monthlyRequests?: number;
+        minuteRequests?: number;
+      };
     };
   } | null;
   const originalProjectOrigins = mutableProject?.policy.allowedOrigins;
   const originalProjectEndpoints = mutableProject?.policy.allowedEndpoints;
+  const originalProjectQuotas = mutableProject?.policy.quotas;
   if (mutableProject !== null && mutableProject !== undefined) {
     mutableProject.policy = {
       ...mutableProject.policy,
@@ -414,10 +442,71 @@ test("authorize tile request policy", () => {
   assert.equal(rasterDeniedByPolicy.denyReason, "ACCESS_UNAUTHORIZED");
 
   if (mutableProject !== null && mutableProject !== undefined) {
+    const previousProjectPolicy = mutableProject.policy;
+    const previousRateLimit = process.env.RATE_LIMIT_MAX_REQUESTS_PER_MINUTE;
+    process.env.RATE_LIMIT_MAX_REQUESTS_PER_MINUTE = "1";
+    mutableProject.policy = {
+      ...mutableProject.policy,
+      allowedEndpoints: {
+        ...mutableProject.policy.allowedEndpoints,
+        staticMaps: true,
+      },
+      quotas: {
+        ...mutableProject.policy.quotas,
+        monthlyRequests: 2,
+      },
+    };
+
+    const staticFirst = authorizeTileRequest({
+      method: "GET",
+      path: "/static/basic/-122.4194,37.7749,12/640x480.png",
+      query: {},
+      headers: {
+        origin: "https://tenant.example",
+        authorization: "tile-token",
+      },
+      clientIp: "10.33.0.1",
+    });
+    const staticSecond = authorizeTileRequest({
+      method: "GET",
+      path: "/static/basic/-122.4194,37.7749,12/640x480.png",
+      query: {},
+      headers: {
+        origin: "https://tenant.example",
+        authorization: "tile-token",
+      },
+      clientIp: "10.33.0.1",
+    });
+    const staticThird = authorizeTileRequest({
+      method: "GET",
+      path: "/static/basic/-122.4194,37.7749,12/640x480.png",
+      query: {},
+      headers: {
+        origin: "https://tenant.example",
+        authorization: "tile-token",
+      },
+      clientIp: "10.33.0.2",
+    });
+
+    assert.equal(staticFirst.allow, true);
+    assert.equal(staticSecond.allow, false);
+    assert.equal(staticSecond.denyReason, "ACCESS_RATE_LIMITED");
+    assert.equal(staticThird.allow, true);
+
+    if (previousRateLimit === undefined) {
+      delete process.env.RATE_LIMIT_MAX_REQUESTS_PER_MINUTE;
+    } else {
+      process.env.RATE_LIMIT_MAX_REQUESTS_PER_MINUTE = previousRateLimit;
+    }
+    mutableProject.policy = previousProjectPolicy;
+  }
+
+  if (mutableProject !== null && mutableProject !== undefined) {
     mutableProject.policy = {
       ...mutableProject.policy,
       allowedOrigins: originalProjectOrigins,
       allowedEndpoints: originalProjectEndpoints ?? mutableProject.policy.allowedEndpoints,
+      quotas: originalProjectQuotas,
     };
   }
 

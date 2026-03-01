@@ -45,6 +45,7 @@ Owns cache ratio monitoring, origin egress tracking, and operational alerts for 
 - SLO definitions are stable and versioned.
 - Alerting logic uses redacted signal payloads only.
 - Metrics are attributable by artifact version and endpoint group.
+- Window aggregation clamps stale/future signal timestamps into bounded active windows.
 
 ## Error Taxonomy
 

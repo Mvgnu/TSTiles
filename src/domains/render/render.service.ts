@@ -114,7 +114,12 @@ function normalizeOverlays(overlays: ReadonlyArray<string> | undefined): string[
 
 function tileFromLatLon(lon: number, lat: number, zoom: number): { z: number; x: number; y: number } {
   const maxCoord = 2 ** zoom;
-  const normalizedLon = ((lon + 180) / 360) % 1;
+  const boundedLon = lon >= 180
+    ? 180 - Number.EPSILON
+    : lon <= -180
+      ? -180
+      : lon;
+  const normalizedLon = (boundedLon + 180) / 360;
   const x = Math.min(
     Math.max(Math.floor(normalizedLon * maxCoord), 0),
     maxCoord - 1,

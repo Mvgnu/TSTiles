@@ -46,12 +46,8 @@ test("health endpoint returns service status without auth", async (): Promise<vo
     headers: {},
   });
   assert.equal(healthHeadDisabled.status, 405);
-  assert.equal(healthHeadDisabled.body instanceof Uint8Array, true);
+  assert.equal(healthHeadDisabled.body, undefined);
   assert.equal(healthHeadDisabled.headers["cache-control"], "no-store");
-  if (healthHeadDisabled.body instanceof Uint8Array) {
-    const payload = JSON.parse(new TextDecoder().decode(healthHeadDisabled.body)) as { error?: string };
-    assert.equal(payload.error, "HEAD_DISABLED");
-  }
   if (originalHeadEnabled === undefined) {
     delete process.env.HEAD_ENABLED;
   } else {
@@ -64,7 +60,7 @@ test("health endpoint returns service status without auth", async (): Promise<vo
     headers: {},
   } as unknown as Parameters<typeof handleHealthRequest>[0]);
   assert.equal(healthBadMethod.status, 400);
-  assert.equal(healthBadMethod.body !== undefined, true);
+  assert.equal(healthBadMethod.body instanceof Uint8Array, true);
   assert.equal(healthBadMethod.headers["cache-control"], "no-store");
 
   const healthBadPath = await handleHealthRequest({

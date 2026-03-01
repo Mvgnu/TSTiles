@@ -1,8 +1,6 @@
 import type { DeliverySignal } from "../../contracts/types";
 import { getProjectPolicy } from "../projects/projects.service";
 import type { ProjectPolicy } from "../projects/types";
-import type { RuntimeConfig } from "../../config/types";
-import { loadConfig } from "../../config/load-config";
 import type {
   BillingEstimate,
   BillingPlan,
@@ -30,6 +28,13 @@ const billingPlansById: ReadonlyMap<string, BillingPlan> = new Map<string, Billi
 const usageBuckets = new Map<string, number>();
 const deliverySignalBuffer: DeliverySignal[] = [];
 const maxDeliverySignalBuffer = 500;
+const cleanupIntervalRequests = 256;
+const usageBucketRetentionWindows: Readonly<Record<UsageCounterWindow, number>> = {
+  minute: 180,
+  day: 14,
+  month: 18,
+};
+let requestsSinceCleanup = 0;
 
 type EndpointGroup = MeteringEndpointGroup;
 
@@ -39,8 +44,12 @@ interface ProjectUsageIdentity {
   readonly planId: string;
 }
 
-function getRuntimeConfig(): RuntimeConfig {
-  return loadConfig();
+interface WindowCounterState {
+  readonly window: UsageCounterWindow;
+  readonly key: string;
+  readonly limit?: number;
+  readonly current: number;
+  readonly next: number;
 }
 
 function normalizeEndpointGroup(endpointGroup: string): EndpointGroup | null {
@@ -84,7 +93,7 @@ function isEndpointAllowed(policy: ProjectPolicy, endpointGroup: EndpointGroup):
   return policy.allowedEndpoints.tiles;
 }
 
-function bucketWindow(window: UsageCounterWindow, date = new Date()): string {
+function bucketWindow(window: UsageCounterWindow, date = new Date(Date.now())): string {
   if (window === "day") {
     return date.toISOString().slice(0, 10);
   }
@@ -105,30 +114,62 @@ function counterKey(
   return `${projectId}|${keyHash}|${planId}|${endpointGroup}|${window}|${bucket}`;
 }
 
-function readCounter(
-  projectId: string,
-  keyHash: string,
-  planId: string,
-  endpointGroup: EndpointGroup,
-  window: UsageCounterWindow,
-): number {
-  const key = counterKey(projectId, keyHash, planId, endpointGroup, window, bucketWindow(window));
-  return usageBuckets.get(key) ?? 0;
+function subtractWindow(date: Date, window: UsageCounterWindow, amount: number): Date {
+  const shifted = new Date(date.getTime());
+  if (window === "minute") {
+    shifted.setUTCMinutes(shifted.getUTCMinutes() - amount);
+    return shifted;
+  }
+  if (window === "day") {
+    shifted.setUTCDate(shifted.getUTCDate() - amount);
+    return shifted;
+  }
+  shifted.setUTCMonth(shifted.getUTCMonth() - amount);
+  return shifted;
 }
 
-function incrementCounter(
-  projectId: string,
-  keyHash: string,
-  planId: string,
-  endpointGroup: EndpointGroup,
-  window: UsageCounterWindow,
-): void {
-  const key = counterKey(projectId, keyHash, planId, endpointGroup, window, bucketWindow(window));
-  const current = usageBuckets.get(key) ?? 0;
-  usageBuckets.set(key, current + 1);
+function usageRetentionCutoff(window: UsageCounterWindow, now = new Date(Date.now())): string {
+  return bucketWindow(window, subtractWindow(now, window, usageBucketRetentionWindows[window]));
 }
 
-function parseMinuteQuota(limit: number | undefined): number | undefined {
+function cleanupUsageBuckets(now = new Date(Date.now())): void {
+  const minuteCutoff = usageRetentionCutoff("minute", now);
+  const dayCutoff = usageRetentionCutoff("day", now);
+  const monthCutoff = usageRetentionCutoff("month", now);
+
+  for (const key of usageBuckets.keys()) {
+    const parts = key.split("|");
+    if (parts.length !== 6) {
+      usageBuckets.delete(key);
+      continue;
+    }
+    const entryWindow = parts[4];
+    const entryBucket = parts[5];
+    if (!isUsageWindow(entryWindow) || !isSafeCounterToken(entryBucket)) {
+      usageBuckets.delete(key);
+      continue;
+    }
+    const cutoff = entryWindow === "minute"
+      ? minuteCutoff
+      : entryWindow === "day"
+        ? dayCutoff
+        : monthCutoff;
+    if (entryBucket < cutoff) {
+      usageBuckets.delete(key);
+    }
+  }
+}
+
+function maybeCleanupUsageBuckets(now = new Date(Date.now())): void {
+  requestsSinceCleanup += 1;
+  if (requestsSinceCleanup < cleanupIntervalRequests) {
+    return;
+  }
+  requestsSinceCleanup = 0;
+  cleanupUsageBuckets(now);
+}
+
+function parseSafePositiveInt(limit: number | undefined): number | undefined {
   if (typeof limit !== "number" || !Number.isFinite(limit) || limit <= 0) {
     return undefined;
   }
@@ -143,25 +184,59 @@ function buildRemaining(limit: number | undefined, count: number): number | unde
   return remaining;
 }
 
+function windowPriority(window: UsageCounterWindow): number {
+  if (window === "minute") {
+    return 0;
+  }
+  if (window === "day") {
+    return 1;
+  }
+  return 2;
+}
+
 function selectPrimaryLimit(
-  minuteLimit: number | undefined,
-  dailyLimit: number | undefined,
-  monthlyLimit: number | undefined,
-): { readonly limit?: number; readonly window?: UsageCounterWindow } {
-  if (monthlyLimit !== undefined) {
-    return { limit: monthlyLimit, window: "month" };
+  windows: readonly WindowCounterState[],
+): { readonly limit?: number; readonly remaining?: number } {
+  let selected:
+    | {
+      readonly limit: number;
+      readonly remaining: number;
+      readonly window: UsageCounterWindow;
+    }
+    | undefined;
+
+  for (const entry of windows) {
+    if (entry.limit === undefined) {
+      continue;
+    }
+    const remaining = buildRemaining(entry.limit, entry.next);
+    if (remaining === undefined) {
+      continue;
+    }
+    if (
+      selected === undefined
+      || remaining < selected.remaining
+      || (remaining === selected.remaining && windowPriority(entry.window) < windowPriority(selected.window))
+    ) {
+      selected = {
+        limit: entry.limit,
+        remaining,
+        window: entry.window,
+      };
+    }
   }
-  if (dailyLimit !== undefined) {
-    return { limit: dailyLimit, window: "day" };
+
+  if (selected === undefined) {
+    return {};
   }
-  if (minuteLimit !== undefined) {
-    return { limit: minuteLimit, window: "minute" };
-  }
-  return {};
+  return {
+    limit: selected.limit,
+    remaining: selected.remaining,
+  };
 }
 
 export function consumeRequestUnit(identity: ProjectUsageIdentity | null, endpointGroup: string): QuotaDecision {
-  getRuntimeConfig();
+  maybeCleanupUsageBuckets();
   if (!isValidUsageIdentity(identity)) {
     return {
       allow: false,
@@ -200,76 +275,116 @@ export function consumeRequestUnit(identity: ProjectUsageIdentity | null, endpoi
     };
   }
 
-  const minuteLimit = parseMinuteQuota(policy.quotas?.minuteRequests);
-  const dailyLimit = parseMinuteQuota(policy.quotas?.dailyRequests);
-  const monthlyLimit = parseMinuteQuota(policy.quotas?.monthlyRequests);
+  const minuteLimit = parseSafePositiveInt(policy.quotas?.minuteRequests);
+  const dailyLimit = parseSafePositiveInt(policy.quotas?.dailyRequests);
+  const monthlyLimit = parseSafePositiveInt(policy.quotas?.monthlyRequests);
+  const now = new Date(Date.now());
+  const minuteKey = counterKey(
+    identity.projectId,
+    identity.keyHash,
+    identity.planId,
+    group,
+    "minute",
+    bucketWindow("minute", now),
+  );
+  const dayKey = counterKey(
+    identity.projectId,
+    identity.keyHash,
+    identity.planId,
+    group,
+    "day",
+    bucketWindow("day", now),
+  );
+  const monthKey = counterKey(
+    identity.projectId,
+    identity.keyHash,
+    identity.planId,
+    group,
+    "month",
+    bucketWindow("month", now),
+  );
+  // TODO: Back counters with shared atomic storage for multi-process deployments.
+  const currentMinute = usageBuckets.get(minuteKey) ?? 0;
+  const currentDay = usageBuckets.get(dayKey) ?? 0;
+  const currentMonth = usageBuckets.get(monthKey) ?? 0;
+  const minuteState: WindowCounterState = {
+    window: "minute",
+    key: minuteKey,
+    limit: minuteLimit,
+    current: currentMinute,
+    next: currentMinute + 1,
+  };
+  const dayState: WindowCounterState = {
+    window: "day",
+    key: dayKey,
+    limit: dailyLimit,
+    current: currentDay,
+    next: currentDay + 1,
+  };
+  const monthState: WindowCounterState = {
+    window: "month",
+    key: monthKey,
+    limit: monthlyLimit,
+    current: currentMonth,
+    next: currentMonth + 1,
+  };
 
-  if (minuteLimit !== undefined) {
-    const minuteCount = readCounter(identity.projectId, identity.keyHash, identity.planId, group, "minute");
-    if (minuteCount >= minuteLimit) {
+  if (minuteState.limit !== undefined) {
+    if (minuteState.current >= minuteState.limit) {
       return {
         allow: false,
         denyReason: "rate_limit",
         remaining: 0,
-        limit: minuteLimit,
+        limit: minuteState.limit,
       };
     }
   }
 
-  if (dailyLimit !== undefined) {
-    const dailyCount = readCounter(identity.projectId, identity.keyHash, identity.planId, group, "day");
-    if (dailyCount >= dailyLimit) {
+  if (dayState.limit !== undefined) {
+    if (dayState.current >= dayState.limit) {
       return {
         allow: false,
         denyReason: "quota",
         remaining: 0,
-        limit: dailyLimit,
+        limit: dayState.limit,
       };
     }
   }
-  if (monthlyLimit !== undefined) {
-    const monthlyCount = readCounter(identity.projectId, identity.keyHash, identity.planId, group, "month");
-    if (monthlyCount >= monthlyLimit) {
+  if (monthState.limit !== undefined) {
+    if (monthState.current >= monthState.limit) {
       return {
         allow: false,
         denyReason: "quota",
         remaining: 0,
-        limit: monthlyLimit,
+        limit: monthState.limit,
       };
     }
   }
 
-  incrementCounter(identity.projectId, identity.keyHash, identity.planId, group, "minute");
-  incrementCounter(identity.projectId, identity.keyHash, identity.planId, group, "day");
-  incrementCounter(identity.projectId, identity.keyHash, identity.planId, group, "month");
+  usageBuckets.set(minuteState.key, minuteState.next);
+  usageBuckets.set(dayState.key, dayState.next);
+  usageBuckets.set(monthState.key, monthState.next);
 
-  const monthCount = readCounter(identity.projectId, identity.keyHash, identity.planId, group, "month");
-  const dayCount = readCounter(identity.projectId, identity.keyHash, identity.planId, group, "day");
-  const minuteCount = readCounter(identity.projectId, identity.keyHash, identity.planId, group, "minute");
-  const primary = selectPrimaryLimit(minuteLimit, dailyLimit, monthlyLimit);
-  const primaryCount = primary.window === "month"
-    ? monthCount
-    : primary.window === "day"
-      ? dayCount
-      : minuteCount;
+  const primary = selectPrimaryLimit([minuteState, dayState, monthState]);
 
   return {
     allow: true,
-    remaining: buildRemaining(primary.limit, primaryCount),
+    remaining: primary.remaining,
     limit: primary.limit,
   };
 }
 
 export function recordDeliverySignal(signal: DeliverySignal): void {
   setTimeout(() => {
-    deliverySignalBuffer.push(signal);
-    if (deliverySignalBuffer.length > maxDeliverySignalBuffer) {
-      deliverySignalBuffer.length = maxDeliverySignalBuffer;
+    if (deliverySignalBuffer.length >= maxDeliverySignalBuffer) {
+      deliverySignalBuffer.shift();
     }
+    deliverySignalBuffer.push(signal);
   }, 0);
 }
 
 export function getUsageSummary(projectId: string, window: UsageCounterWindow): UsageSummary[] {
+  cleanupUsageBuckets();
   if (!isSafeCounterToken(projectId)) {
     return [];
   }

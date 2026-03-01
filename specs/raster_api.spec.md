@@ -45,7 +45,9 @@ Owns HTTP request handling for raster tiles and static images.
 - Uses `access` authorization and CORS decisions.
 - Quota checks run before render work begins.
 - Cache key excludes auth query params and includes style/version identity.
+- Static map coordinates enforce geographic bounds (`lon: -180..180`, `lat: -90..90`).
 - `HEAD` responses are only served when `HEAD_ENABLED=true`; if disabled, handlers return `405` with `HEAD_DISABLED`.
+  `HEAD_DISABLED` responses for HEAD requests are body-less.
 
 ## Error Taxonomy
 

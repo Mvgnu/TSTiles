@@ -122,7 +122,7 @@ test("metadata endpoint validates path, cache headers, and auth", async (): Prom
     },
   });
   assert.equal(headDisabled.status, 405);
-  assert.equal(headDisabled.body !== undefined, true);
+  assert.equal(headDisabled.body, undefined);
   assert.equal(headDisabled.headers["cache-control"], "no-store");
 
   process.env.METADATA_CACHE_TTL_SECONDS = "45";

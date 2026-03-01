@@ -143,7 +143,7 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
     },
   });
   assert.equal(headDisabled.status, 405);
-  assert.equal(headDisabled.body !== undefined, true);
+  assert.equal(headDisabled.body, undefined);
   assert.equal(headDisabled.headers["cache-control"], "no-store");
 
   const options = await handleTileRequest({

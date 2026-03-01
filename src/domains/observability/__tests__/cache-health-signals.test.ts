@@ -8,6 +8,17 @@ const test: TestFunction = ((globalThis as { test?: TestFunction }).test ?? ((_,
   void fn();
 }));
 
+function withFrozenNow<T>(isoTimestamp: string, fn: () => T): T {
+  const fixedNow = new Date(isoTimestamp).getTime();
+  const previousNow = Date.now;
+  Date.now = () => fixedNow;
+  try {
+    return fn();
+  } finally {
+    Date.now = previousNow;
+  }
+}
+
 test("observability SLO evaluation and validation", () => {
 Object.assign(process.env, {
   OBJECT_STORE_BUCKET: "test-bucket",
@@ -338,4 +349,50 @@ assert.equal(alertFailureSuppressedWhenDisabled.artifactVersion, "artifact-alert
 
 process.env.OBSERVABILITY_ENABLED = "true";
 delete process.env.OBS_ALERT_FORCE_FAIL;
+});
+
+test("observability clamps stale timestamps into bounded windows", () => {
+  Object.assign(process.env, {
+    OBJECT_STORE_BUCKET: "test-bucket",
+    ADMIN_TOKEN: "admin-token",
+    ALLOWED_ORIGINS: "*",
+    NODE_ENV: "development",
+    OBSERVABILITY_ENABLED: "false",
+    CACHE_WARN_THRESHOLD: "0.9",
+    CACHE_CRITICAL_THRESHOLD: "0.7",
+    ERROR_WARN_THRESHOLD: "0.01",
+    ERROR_CRITICAL_THRESHOLD: "0.03",
+  });
+
+  withFrozenNow("2026-03-01T10:00:00.000Z", () => {
+    const stale = evaluateTileSLOs({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      artifactVersion: "artifact-clamped",
+      tilePath: "/tiles/1/2/3.mvt",
+      cacheStatus: "hit",
+      originRead: false,
+      responseBytes: 64,
+      latencyMs: 5,
+      statusCode: 200,
+      normalizedMethod: "GET",
+      receivedAt: "2010-01-01T00:00:00.000Z",
+    });
+    const fresh = evaluateTileSLOs({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      artifactVersion: "artifact-clamped",
+      tilePath: "/tiles/1/2/3.mvt",
+      cacheStatus: "miss",
+      originRead: true,
+      responseBytes: 64,
+      latencyMs: 6,
+      statusCode: 200,
+      normalizedMethod: "GET",
+      receivedAt: "2026-03-01T10:00:10.000Z",
+    });
+
+    const windowMs = 15 * 60 * 1000;
+    const oldestRetainedWindowStart = Math.floor((Date.now() - (windowMs * 3)) / windowMs) * windowMs;
+    assert.equal(stale.window.windowStart >= oldestRetainedWindowStart, true);
+    assert.equal(fresh.window.totalRequests, 1);
+  });
 });

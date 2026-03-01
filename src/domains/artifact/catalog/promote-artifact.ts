@@ -1,6 +1,8 @@
 import type { ActiveArtifactPointer, ArtifactVersion } from "../types";
 import { ArtifactError, ArtifactErrorCode } from "../types";
 
+const MAX_ROLLBACK_HISTORY = 128;
+
 export function promote(
   request: { versionId: string },
   catalog: Map<string, ArtifactVersion>,
@@ -23,6 +25,9 @@ export function promote(
   }
   if (activeRef.value) {
     history.push(activeRef.value);
+    while (history.length > MAX_ROLLBACK_HISTORY) {
+      history.shift();
+    }
   }
   const pointer: ActiveArtifactPointer = {
     versionId: normalizedVersionId,

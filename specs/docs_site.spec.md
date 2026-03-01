@@ -11,7 +11,6 @@ exports:
   - getOpenApiJson
   - getExamples
 consumes:
-  - contracts
   - styles
 verification:
   typecheck: "npx tsc --noEmit"
@@ -66,5 +65,5 @@ Owns public documentation pages, examples, and generated API reference payloads.
 
 ## Dependency Direction
 
-- May depend on `contracts` and optionally `styles`.
+- May depend on `styles`.
 - Must not depend on control-plane or metering internals.

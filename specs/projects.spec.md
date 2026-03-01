@@ -20,8 +20,6 @@ exports:
   - getProjectPolicy
 consumes:
   - config.SecurityConfig
-  - contracts.ContractError
-  - contracts.ContractErrorCode
 verification:
   typecheck: "npx tsc --noEmit"
   test: "vitest run src/domains/projects/__tests__/ --globals --passWithNoTests"
@@ -74,5 +72,5 @@ Owns everything that turns a provided API token into a sanitized project identit
 
 ## Dependency Direction
 
-- May depend on `config` and `contracts`.
+- May depend on `config`.
 - Must not depend on request-path domains (`tile_api`, `raster_api`, `access`).

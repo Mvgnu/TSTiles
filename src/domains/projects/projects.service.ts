@@ -17,7 +17,6 @@ const defaultPolicy: ProjectPolicy = {
 
 const projects = new Map<string, Project>();
 const apiKeys = new Map<string, ApiKeyRecord>();
-const keyIndex = new Map<string, string>();
 let initialized = false;
 
 function buildProjectsPolicyError(message: string): Error {
@@ -228,7 +227,6 @@ function registerApiKey(projectId: string, rawToken: string): ApiKeyRecord {
     revoked: false,
   };
   apiKeys.set(keyHash, record);
-  keyIndex.set(keyId, keyHash);
   return record;
 }
 
