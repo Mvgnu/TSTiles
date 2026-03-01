@@ -478,6 +478,18 @@ test("raster and static routes resolve and enforce request semantics", async ():
   });
   assert.equal(denied.status, 401);
   assert.equal(denied.headers["cache-control"], "no-store");
+  assert.notEqual(denied.body, undefined);
+
+  const deniedHead = await handleRasterTileRequest({
+    method: "HEAD",
+    path: "/v1/raster/basic/2/2/3.png",
+    headers: {
+      origin: "https://example.com",
+    },
+  });
+  assert.equal(deniedHead.status, 401);
+  assert.equal(deniedHead.headers["cache-control"], "no-store");
+  assert.equal(deniedHead.body, undefined);
 
   const deniedStatic = await handleStaticMapRequest({
     method: "GET",
@@ -488,6 +500,18 @@ test("raster and static routes resolve and enforce request semantics", async ():
   });
   assert.equal(deniedStatic.status, 401);
   assert.equal(deniedStatic.headers["cache-control"], "no-store");
+  assert.notEqual(deniedStatic.body, undefined);
+
+  const deniedStaticHead = await handleStaticMapRequest({
+    method: "HEAD",
+    path: "/v1/static/basic/-122.4194,37.7749,12/640x480.png",
+    headers: {
+      origin: "https://example.com",
+    },
+  });
+  assert.equal(deniedStaticHead.status, 401);
+  assert.equal(deniedStaticHead.headers["cache-control"], "no-store");
+  assert.equal(deniedStaticHead.body, undefined);
 
   if (originalHeadEnabled === undefined) {
     delete process.env.HEAD_ENABLED;

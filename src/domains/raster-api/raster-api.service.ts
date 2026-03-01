@@ -40,6 +40,13 @@ function encodeJsonError(message: string): Uint8Array {
   return new TextEncoder().encode(JSON.stringify({ error: message }));
 }
 
+function responseBodyForMethod(method: RasterRequest["method"], body: Uint8Array): Uint8Array | undefined {
+  if (method === "HEAD") {
+    return undefined;
+  }
+  return body;
+}
+
 function parseQueryValue(query: RasterRequest["query"], key: string): string | undefined {
   const raw = query?.[key];
   if (Array.isArray(raw)) {
@@ -367,7 +374,7 @@ async function handleRasterRequest(
     if (!auth.allow) {
       return {
         status: mapDenyStatus(auth.denyReason),
-        body: encodeJsonError("DENIED"),
+        body: responseBodyForMethod(input.method, encodeJsonError("DENIED")),
         headers: {
           ...cors,
           "content-type": "application/json",
@@ -418,28 +425,28 @@ async function handleRasterRequest(
       if (error.code === RenderErrorCode.STYLE_NOT_FOUND) {
         return {
           status: 404,
-          body: encodeJsonError(RasterApiErrorCode.STYLE_NOT_FOUND),
+          body: responseBodyForMethod(input.method, encodeJsonError(RasterApiErrorCode.STYLE_NOT_FOUND)),
           headers: errorHeaders,
         };
       }
       if (error.code === RenderErrorCode.TILE_RESOLVE_FAILED) {
         return {
           status: 502,
-          body: encodeJsonError(RasterApiErrorCode.RENDER_FAILED),
+          body: responseBodyForMethod(input.method, encodeJsonError(RasterApiErrorCode.RENDER_FAILED)),
           headers: errorHeaders,
         };
       }
       if (error.code === RenderErrorCode.BACKEND_UNAVAILABLE) {
         return {
           status: 503,
-          body: encodeJsonError(RasterApiErrorCode.RENDER_FAILED),
+          body: responseBodyForMethod(input.method, encodeJsonError(RasterApiErrorCode.RENDER_FAILED)),
           headers: errorHeaders,
         };
       }
       if (error.code === RenderErrorCode.BAD_REQUEST) {
         return {
           status: 400,
-          body: encodeJsonError(RasterApiErrorCode.BAD_REQUEST),
+          body: responseBodyForMethod(input.method, encodeJsonError(RasterApiErrorCode.BAD_REQUEST)),
           headers: errorHeaders,
         };
       }
@@ -455,21 +462,21 @@ async function handleRasterRequest(
       if (error.code === RasterApiErrorCode.BAD_REQUEST) {
         return {
           status: 400,
-          body: encodeJsonError(RasterApiErrorCode.BAD_REQUEST),
+          body: responseBodyForMethod(input.method, encodeJsonError(RasterApiErrorCode.BAD_REQUEST)),
           headers: errorHeaders,
         };
       }
       if (error.code === RasterApiErrorCode.BAD_COORDINATES || error.code === RasterApiErrorCode.STATIC_BAD_REQUEST) {
         return {
           status: 400,
-          body: encodeJsonError(error.code),
+          body: responseBodyForMethod(input.method, encodeJsonError(error.code)),
           headers: errorHeaders,
         };
       }
     }
     return {
       status: 500,
-      body: encodeJsonError(RasterApiErrorCode.RENDER_FAILED),
+      body: responseBodyForMethod(input.method, encodeJsonError(RasterApiErrorCode.RENDER_FAILED)),
       headers: errorHeaders,
     };
   }
