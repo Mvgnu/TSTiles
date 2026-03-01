@@ -31,6 +31,18 @@ interface ParsedStylePath {
   readonly name?: string;
 }
 
+function styleErrorCode(error: unknown): string | undefined {
+  if (!(error instanceof Error)) {
+    return undefined;
+  }
+  const withCode = error as Error & { code?: unknown };
+  if (typeof withCode.code === "string" && withCode.code.length > 0) {
+    return withCode.code;
+  }
+  const [code] = error.message.split(":");
+  return typeof code === "string" && code.length > 0 ? code : undefined;
+}
+
 function getPublishedStyle(styleId: string): { styleId: string; document: ReturnType<typeof getStyle> } {
   const record = listStyles().find((entry) => entry.id === styleId);
   if (!record || !record.publishedVersionId) {
@@ -225,8 +237,8 @@ export async function handleStyleRequest(input: StyleRequest): Promise<StyleResp
       };
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : "STYLE_NOT_FOUND";
-    if (message.startsWith("STYLE_NOT_FOUND") || message.startsWith("STYLE_VERSION_NOT_FOUND")) {
+    const code = styleErrorCode(error);
+    if (code === "STYLE_NOT_FOUND" || code === "STYLE_VERSION_NOT_FOUND") {
       return {
         status: 404,
         body: encodeJsonError("STYLE_NOT_FOUND"),
@@ -237,7 +249,7 @@ export async function handleStyleRequest(input: StyleRequest): Promise<StyleResp
         },
       };
     }
-    if (message.startsWith("STYLE_BAD_REQUEST") || message.startsWith("STYLE_INVALID_DOCUMENT")) {
+    if (code === "STYLE_BAD_REQUEST" || code === "STYLE_INVALID_DOCUMENT") {
       return {
         status: 400,
         body: encodeJsonError("STYLE_BAD_REQUEST"),

@@ -106,16 +106,16 @@ export async function resolveVectorTile(input: ResolveVectorTileInput): Promise<
 
 export function resolveMetadata(input: ResolveMetadataInput = {}): ResolvedMetadata {
   try {
-  const artifact = resolveArtifactRecord(input.artifactId);
-  const all = listArtifacts()
-    .map((entry) => entry.id)
-    .sort((left, right) => left.localeCompare(right));
-  return {
-    activeVersionId: artifact.id,
-    artifact,
-    availableVersions: all,
-    etagSeed: artifact.checksum,
-  };
+    const artifact = resolveArtifactRecord(input.artifactId);
+    const all = listArtifacts()
+      .map((entry) => entry.id)
+      .sort((left, right) => left.localeCompare(right));
+    return {
+      activeVersionId: artifact.id,
+      artifact,
+      availableVersions: all,
+      etagSeed: artifact.checksum,
+    };
   } catch (error: unknown) {
     mapResolverFailure(error);
   }

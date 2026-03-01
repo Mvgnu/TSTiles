@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
-import { loadConfig } from "../../config/load-config";
 import type { StyleDocument } from "../styles/types";
 import { getStyle } from "../styles/styles.service";
 import { resolveVectorTile } from "../tile-resolver/tile-resolver.service";
-import type {
-  RasterTileRequest,
-  RenderedImage,
-  RenderFormat,
-  StaticMapRequest,
+import {
+  RenderError,
+  RenderErrorCode,
+  type RasterTileRequest,
+  type RenderedImage,
+  type RenderFormat,
+  type StaticMapRequest,
 } from "./types";
 import { renderLocally } from "./adapters/local-native-renderer";
 import { renderWithRemoteService } from "./adapters/remote-renderer-client";
@@ -29,10 +30,11 @@ interface TileRequestInput {
   readonly sourceY?: number;
 }
 
-function asRenderError(message: string): Error {
-  return new Error(message);
+interface SourceCoordinates {
+  readonly sourceZ: number;
+  readonly sourceX: number;
+  readonly sourceY: number;
 }
-
 
 function formatForImage(format: RenderFormat): string {
   if (format === "webp") {
@@ -43,13 +45,13 @@ function formatForImage(format: RenderFormat): string {
 
 function assertInteger(value: unknown, label: string): void {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-    throw asRenderError(`RENDER_BAD_REQUEST:${label}`);
+    throwRenderError(RenderErrorCode.BAD_REQUEST, label);
   }
 }
 
 function parseStaticCoordinate(value: unknown, label: string): number {
   if (typeof value !== "number" || Number.isNaN(value) || !Number.isFinite(value)) {
-    throw asRenderError(`RENDER_BAD_REQUEST:${label}`);
+    throwRenderError(RenderErrorCode.BAD_REQUEST, label);
   }
   return value;
 }
@@ -57,18 +59,18 @@ function parseStaticCoordinate(value: unknown, label: string): number {
 function assertRasterCoordinates(z: number, x: number, y: number): void {
   const maxZoom = 30;
   if (z > maxZoom) {
-    throw asRenderError("RENDER_BAD_REQUEST:z");
+    throwRenderError(RenderErrorCode.BAD_REQUEST, "z");
   }
   const axisLimit = 2 ** z;
   if (x >= axisLimit || y >= axisLimit) {
-    throw asRenderError("RENDER_BAD_REQUEST:tile");
+    throwRenderError(RenderErrorCode.BAD_REQUEST, "tile");
   }
 }
 
 function normalizeRequiredIdentifier(value: string, label: string): string {
   const trimmed = value.trim();
   if (trimmed.length === 0) {
-    throw asRenderError(`RENDER_BAD_REQUEST:${label}`);
+    throwRenderError(RenderErrorCode.BAD_REQUEST, label);
   }
   return trimmed;
 }
@@ -79,14 +81,14 @@ function normalizeOptionalIdentifier(value: string | undefined, label: string): 
   }
   const trimmed = value.trim();
   if (trimmed.length === 0) {
-    throw asRenderError(`RENDER_BAD_REQUEST:${label}`);
+    throwRenderError(RenderErrorCode.BAD_REQUEST, label);
   }
   return trimmed;
 }
 
 function assertNonNegativeFinite(value: unknown, label: string): number {
   if (typeof value !== "number" || Number.isNaN(value) || !Number.isFinite(value) || value < 0) {
-    throw asRenderError(`RENDER_BAD_REQUEST:${label}`);
+    throwRenderError(RenderErrorCode.BAD_REQUEST, label);
   }
   return value;
 }
@@ -149,11 +151,24 @@ function buildCacheKey(input: TileRequestInput & { artifactId: string; styleVers
   ].join(":");
 }
 
-function buildErrorForMap(error: unknown): never {
-  if (error instanceof Error && error.message === "RENDER_BAD_REQUEST:format") {
-    throw new Error("RENDER_BAD_REQUEST");
+function throwRenderError(code: RenderErrorCode, details?: string): never {
+  throw new RenderError(code, details);
+}
+
+function isRenderError(value: unknown): value is RenderError {
+  return value instanceof RenderError;
+}
+
+function messageCode(value: unknown): string | undefined {
+  if (!(value instanceof Error)) {
+    return undefined;
   }
-  throw error instanceof Error ? error : new Error("RENDER_RENDER_FAILED");
+  const withCode = value as Error & { code?: unknown };
+  if (typeof withCode.code === "string" && withCode.code.length > 0) {
+    return withCode.code;
+  }
+  const [code] = value.message.split(":");
+  return typeof code === "string" && code.length > 0 ? code : undefined;
 }
 
 async function resolveStyle(styleId: string, versionId?: string): Promise<ResolvedStyle> {
@@ -163,17 +178,17 @@ async function resolveStyle(styleId: string, versionId?: string): Promise<Resolv
       versionKey: buildStyleVersionKey(document),
     };
   } catch (error) {
-    const cause = error instanceof Error ? error.message : "";
-    if (cause.includes("STYLE_NOT_FOUND")) {
-      throw new Error("RENDER_STYLE_NOT_FOUND");
+    if (isRenderError(error)) {
+      throw error;
     }
-    if (cause.includes("STYLE_VERSION_NOT_FOUND")) {
-      throw new Error("RENDER_STYLE_NOT_FOUND");
+    const code = messageCode(error);
+    if (code === "STYLE_NOT_FOUND" || code === "STYLE_VERSION_NOT_FOUND") {
+      throwRenderError(RenderErrorCode.STYLE_NOT_FOUND);
     }
-    if (cause.includes("STYLE_INVALID_DOCUMENT")) {
-      throw new Error("RENDER_BAD_REQUEST");
+    if (code === "STYLE_INVALID_DOCUMENT") {
+      throwRenderError(RenderErrorCode.BAD_REQUEST);
     }
-    throw new Error("RENDER_STYLE_NOT_FOUND");
+    throwRenderError(RenderErrorCode.BACKEND_UNAVAILABLE, "style");
   }
 }
 
@@ -185,66 +200,78 @@ function selectRenderer() {
   return renderLocally;
 }
 
-function parseTileMetadataInput(input: RasterTileRequest | StaticMapRequest, isStatic = false): Omit<TileRequestInput, "sourcePath" | "styleId" | "format"> {
-  if (isStatic) {
-    const staticInput = input as StaticMapRequest;
-    if (staticInput.width < 1 || staticInput.height < 1) {
-      throw asRenderError("RENDER_BAD_REQUEST:width");
-    }
-    const maxDimension = 4096;
-    if (staticInput.width > maxDimension || staticInput.height > maxDimension) {
-      throw asRenderError("RENDER_BAD_REQUEST:dimension");
-    }
-    const z = staticInput.zoom;
-    const normalizedZoom = assertNonNegativeFinite(z, "zoom");
-    const maxZoom = 30;
-    if (normalizedZoom > maxZoom) {
-      throw asRenderError("RENDER_BAD_REQUEST:zoom");
-    }
-    const lon = parseStaticCoordinate(staticInput.lon, "lon");
-    const lat = parseStaticCoordinate(staticInput.lat, "lat");
-    const tile = tileFromLatLon(lon, lat, Math.floor(normalizedZoom));
-    return {
-      styleVersionId: staticInput.versionId,
-      sourceZ: tile.z,
-      sourceX: tile.x,
-      sourceY: tile.y,
-      width: staticInput.width,
-      height: staticInput.height,
-      overlays: staticInput.overlays,
-    };
-  }
-  const rasterInput = input as RasterTileRequest;
-  assertInteger(rasterInput.z, "z");
-  assertInteger(rasterInput.x, "x");
-  assertInteger(rasterInput.y, "y");
-  assertRasterCoordinates(rasterInput.z, rasterInput.x, rasterInput.y);
+function parseRasterTileSource(input: RasterTileRequest): SourceCoordinates & { readonly styleVersionId?: string } {
+  assertInteger(input.z, "z");
+  assertInteger(input.x, "x");
+  assertInteger(input.y, "y");
+  assertRasterCoordinates(input.z, input.x, input.y);
   return {
-    styleVersionId: rasterInput.versionId,
-    sourceZ: rasterInput.z,
-    sourceX: rasterInput.x,
-    sourceY: rasterInput.y,
-    overlays: undefined,
+    styleVersionId: input.versionId,
+    sourceZ: input.z,
+    sourceX: input.x,
+    sourceY: input.y,
+  };
+}
+
+function parseStaticMapSource(
+  input: StaticMapRequest,
+): SourceCoordinates & {
+  readonly styleVersionId?: string;
+  readonly width: number;
+  readonly height: number;
+  readonly overlays?: ReadonlyArray<string>;
+} {
+  if (input.width < 1 || input.height < 1) {
+    throwRenderError(RenderErrorCode.BAD_REQUEST, "width");
+  }
+  const maxDimension = 4096;
+  if (input.width > maxDimension || input.height > maxDimension) {
+    throwRenderError(RenderErrorCode.BAD_REQUEST, "dimension");
+  }
+  const normalizedZoom = assertNonNegativeFinite(input.zoom, "zoom");
+  const maxZoom = 30;
+  if (normalizedZoom > maxZoom) {
+    throwRenderError(RenderErrorCode.BAD_REQUEST, "zoom");
+  }
+  const lon = parseStaticCoordinate(input.lon, "lon");
+  const lat = parseStaticCoordinate(input.lat, "lat");
+  const tile = tileFromLatLon(lon, lat, Math.floor(normalizedZoom));
+  return {
+    styleVersionId: input.versionId,
+    sourceZ: tile.z,
+    sourceX: tile.x,
+    sourceY: tile.y,
+    width: input.width,
+    height: input.height,
+    overlays: input.overlays,
   };
 }
 
 async function renderFromSource(input: TileRequestInput): Promise<RenderedImage> {
-  if (!input.format) {
-    throw asRenderError("RENDER_BAD_REQUEST:format");
-  }
   const style = await resolveStyle(input.styleId, input.styleVersionId);
+  if (input.sourceZ === undefined || input.sourceX === undefined || input.sourceY === undefined) {
+    throwRenderError(RenderErrorCode.BAD_REQUEST, "source");
+  }
   let resolvedTile: Awaited<ReturnType<typeof resolveVectorTile>>;
   try {
-    const coords = input.sourceZ === undefined || input.sourceX === undefined || input.sourceY === undefined
-      ? undefined
-      : { z: input.sourceZ, x: input.sourceX, y: input.sourceY };
-    resolvedTile = await resolveVectorTile(coords === undefined ? { z: 0, x: 0, y: 0 } : coords);
+    resolvedTile = await resolveVectorTile({
+      z: input.sourceZ,
+      x: input.sourceX,
+      y: input.sourceY,
+    });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "error";
-    if (message === "RESOLVER_BAD_COORDINATES" || message === "RESOLVER_TILE_NOT_FOUND" || message === "RESOLVER_ARTIFACT_UNAVAILABLE") {
-      throw new Error("RENDER_TILE_RESOLVE_FAILED");
+    const code = messageCode(error);
+    if (code === "RESOLVER_BAD_COORDINATES") {
+      throwRenderError(RenderErrorCode.BAD_REQUEST, "coordinates");
     }
-    throw buildErrorForMap(error);
+    if (
+      code === "RESOLVER_TILE_NOT_FOUND"
+      || code === "RESOLVER_ARTIFACT_UNAVAILABLE"
+      || code === "RESOLVER_ORIGIN_READ_FAILED"
+    ) {
+      throwRenderError(RenderErrorCode.TILE_RESOLVE_FAILED);
+    }
+    throwRenderError(RenderErrorCode.BACKEND_UNAVAILABLE, "resolver");
   }
   const renderer = selectRenderer();
   try {
@@ -273,24 +300,24 @@ async function renderFromSource(input: TileRequestInput): Promise<RenderedImage>
       format: input.format,
     };
   } catch (error) {
-    if (error instanceof Error && error.message === "RENDER_BACKEND_UNAVAILABLE") {
+    if (isRenderError(error)) {
       throw error;
     }
-    throw new Error("RENDER_BACKEND_UNAVAILABLE");
+    const code = messageCode(error);
+    if (code === "RENDER_BAD_REQUEST") {
+      throwRenderError(RenderErrorCode.BAD_REQUEST);
+    }
+    throwRenderError(RenderErrorCode.BACKEND_UNAVAILABLE);
   }
 }
 
 export async function renderRasterTile(input: RasterTileRequest): Promise<RenderedImage> {
-  loadConfig();
   if (input.format !== "png" && input.format !== "webp") {
-    throw asRenderError("RENDER_BAD_REQUEST");
+    throwRenderError(RenderErrorCode.BAD_REQUEST, "format");
   }
   const normalizedStyleId = normalizeRequiredIdentifier(input.styleId, "styleId");
   const normalizedVersionId = normalizeOptionalIdentifier(input.versionId, "versionId");
-  const metadata = parseTileMetadataInput(input);
-  if (metadata.sourceZ === undefined || metadata.sourceX === undefined || metadata.sourceY === undefined) {
-    throw asRenderError("RENDER_BAD_REQUEST");
-  }
+  const metadata = parseRasterTileSource(input);
   return renderFromSource({
     styleId: normalizedStyleId,
     styleVersionId: normalizedVersionId ?? metadata.styleVersionId,
@@ -303,28 +330,12 @@ export async function renderRasterTile(input: RasterTileRequest): Promise<Render
 }
 
 export async function renderStaticMap(input: StaticMapRequest): Promise<RenderedImage> {
-  loadConfig();
   if (input.format !== "png" && input.format !== "webp") {
-    throw asRenderError("RENDER_BAD_REQUEST");
+    throwRenderError(RenderErrorCode.BAD_REQUEST, "format");
   }
   const normalizedStyleId = normalizeRequiredIdentifier(input.styleId, "styleId");
   const normalizedVersionId = normalizeOptionalIdentifier(input.versionId, "versionId");
-  const metadata = parseTileMetadataInput(input, true);
-  if (
-    metadata.sourceZ === undefined ||
-    metadata.sourceX === undefined ||
-    metadata.sourceY === undefined ||
-    metadata.width === undefined ||
-    metadata.height === undefined
-  ) {
-    throw asRenderError("RENDER_BAD_REQUEST");
-  }
-  if (metadata.width > 4096 || metadata.height > 4096) {
-    throw asRenderError("RENDER_BAD_REQUEST");
-  }
-  if (!Number.isInteger(metadata.width) || !Number.isInteger(metadata.height)) {
-    throw asRenderError("RENDER_BAD_REQUEST");
-  }
+  const metadata = parseStaticMapSource(input);
   return renderFromSource({
     styleId: normalizedStyleId,
     styleVersionId: normalizedVersionId ?? metadata.styleVersionId,

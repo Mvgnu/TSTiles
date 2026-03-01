@@ -3,6 +3,18 @@ import { isAuthorized } from "../control-plane/auth/admin-auth";
 import type { StyleAdminDraft, StudioStyleListItem } from "./types";
 import type { StyleInput } from "../styles/types";
 
+function styleErrorCode(error: unknown): string | undefined {
+  if (!(error instanceof Error)) {
+    return undefined;
+  }
+  const withCode = error as Error & { code?: unknown };
+  if (typeof withCode.code === "string" && withCode.code.length > 0) {
+    return withCode.code;
+  }
+  const [code] = error.message.split(":");
+  return typeof code === "string" && code.length > 0 ? code : undefined;
+}
+
 function assertAdmin(token?: string): void {
   if (!isAuthorized(token)) {
     throw new Error("STUDIO_UNAUTHORIZED");
@@ -30,7 +42,7 @@ function buildDraftStyle(styleId: string): StyleAdminDraft | undefined {
       previewUrl: `/v1/styles/${styleId}/style.json`,
     };
   } catch (error) {
-    if (error instanceof Error && error.message.includes("STYLE_NOT_FOUND")) {
+    if (styleErrorCode(error) === "STYLE_NOT_FOUND") {
       return undefined;
     }
     throw error;

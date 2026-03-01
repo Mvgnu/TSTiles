@@ -13,6 +13,7 @@ consumes:
   - access.authorizeTileRequest
   - render.renderRasterTile
   - render.renderStaticMap
+  - render.RenderErrorCode
   - config.TileDeliveryPolicy
   - contracts.AuthorizeContext
 verification:
@@ -48,6 +49,7 @@ Owns HTTP request handling for raster tiles and static images.
 - Static map coordinates enforce geographic bounds (`lon: -180..180`, `lat: -90..90`).
 - `HEAD` responses are only served when `HEAD_ENABLED=true`; if disabled, handlers return `405` with `HEAD_DISABLED`.
   `HEAD_DISABLED` responses for HEAD requests are body-less.
+- Render calls are timeout-bounded (`RENDER_TIMEOUT_MS`, default `15000`) and return `503` on timeout.
 
 ## Error Taxonomy
 

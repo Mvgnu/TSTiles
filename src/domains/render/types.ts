@@ -1,5 +1,22 @@
 export type RenderFormat = "png" | "webp";
 
+export const enum RenderErrorCode {
+  STYLE_NOT_FOUND = "RENDER_STYLE_NOT_FOUND",
+  TILE_RESOLVE_FAILED = "RENDER_TILE_RESOLVE_FAILED",
+  BACKEND_UNAVAILABLE = "RENDER_BACKEND_UNAVAILABLE",
+  BAD_REQUEST = "RENDER_BAD_REQUEST",
+}
+
+export class RenderError extends Error {
+  public readonly code: RenderErrorCode;
+
+  public constructor(code: RenderErrorCode, details?: string) {
+    super(details ? `${code}:${details}` : code);
+    this.code = code;
+    this.name = "RenderError";
+  }
+}
+
 export interface RasterTileCoordinates {
   readonly z: number;
   readonly x: number;

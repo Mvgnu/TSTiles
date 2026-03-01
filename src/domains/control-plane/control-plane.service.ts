@@ -27,6 +27,24 @@ const auditLog: AuditEvent[] = [];
 
 const AUDIT_RETENTION = 50;
 const JOB_RETENTION = 25;
+const conflictErrorCodes = new Set([
+  "PROJECTS_PROJECT_NOT_FOUND",
+  "STYLE_NOT_FOUND",
+  "STYLE_VERSION_NOT_FOUND",
+  "STYLE_PUBLISH_CONFLICT",
+]);
+
+function extractErrorCode(error: unknown): string | undefined {
+  if (!(error instanceof Error)) {
+    return undefined;
+  }
+  const withCode = error as Error & { code?: unknown };
+  if (typeof withCode.code === "string" && withCode.code.length > 0) {
+    return withCode.code;
+  }
+  const [code] = error.message.split(":");
+  return typeof code === "string" && code.length > 0 ? code : undefined;
+}
 
 function normalizeErrorMessage(error: unknown): string {
   if (error instanceof Error && "code" in error) {
@@ -112,16 +130,12 @@ function mapDomainConflict(error: unknown): never {
   if (error instanceof ControlPlaneError) {
     throw error;
   }
-  if (error instanceof Error) {
-    const message = error.message;
-    if (
-      message.includes("PROJECTS_PROJECT_NOT_FOUND")
-      || message.includes("STYLE_NOT_FOUND")
-      || message.includes("STYLE_VERSION_NOT_FOUND")
-      || message.includes("STYLE_PUBLISH_CONFLICT")
-    ) {
-      throw new ControlPlaneError(ControlPlaneErrorCode.CONFLICT, message);
-    }
+  const code = extractErrorCode(error);
+  if (code !== undefined && conflictErrorCodes.has(code)) {
+    throw new ControlPlaneError(
+      ControlPlaneErrorCode.CONFLICT,
+      error instanceof Error ? error.message : code,
+    );
   }
   throw error instanceof Error ? error : new Error("Control plane operation failed");
 }

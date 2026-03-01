@@ -3,9 +3,8 @@ import { loadConfig } from "../../config/load-config";
 import type { AuthorizeContext } from "../../contracts/types";
 import { authorizeTileRequest, buildCorsHeaders } from "../access/access.service";
 import { renderRasterTile, renderStaticMap } from "../render/render.service";
-import type { RasterRequest, RasterResponse } from "./types";
-import type { RasterTileRequest, StaticMapRequest } from "../render/types";
-import type { RenderedImage } from "../render/types";
+import { RenderError, RenderErrorCode, type RasterTileRequest, type StaticMapRequest, type RenderedImage } from "../render/types";
+import { RasterApiError, RasterApiErrorCode, type RasterRequest, type RasterResponse } from "./types";
 
 interface RasterPathMatch {
   readonly styleId: string;
@@ -31,6 +30,11 @@ const rasterPathRegex = /^\/(?:v1\/)?raster\/([^/]+)\/(\d+)\/(\d+)\/(\d+)\.(png|
 const staticPathRegex = /^\/(?:v1\/)?static\/([^/]+)\/(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(\d+(?:\.\d+)?)\/(\d+)x(\d+)\.(png|webp)$/;
 const maxStaticDimension = 4096;
 const maxStaticZoom = 30;
+const defaultRenderTimeoutMs = 15_000;
+
+function throwRasterApiError(code: RasterApiErrorCode): never {
+  throw new RasterApiError(code);
+}
 
 function encodeJsonError(message: string): Uint8Array {
   return new TextEncoder().encode(JSON.stringify({ error: message }));
@@ -60,51 +64,51 @@ function normalizeOrigin(headers: Record<string, string | undefined>): string | 
   return headers.origin ?? headers.Origin;
 }
 
-function toNumber(value: string): number {
+function toNumber(value: string, errorCode: RasterApiErrorCode): number {
   const converted = Number(value);
   if (!Number.isFinite(converted)) {
-    throw new Error("RASTER_BAD_COORDINATES");
+    throwRasterApiError(errorCode);
   }
   return converted;
 }
 
-function toInteger(value: string): number {
+function toInteger(value: string, errorCode: RasterApiErrorCode): number {
   const converted = Number(value);
   if (!Number.isFinite(converted) || !Number.isInteger(converted) || converted < 0) {
-    throw new Error("RASTER_BAD_COORDINATES");
+    throwRasterApiError(errorCode);
   }
   return converted;
 }
 
 function assertHeadEnabled(method: RasterRequest["method"], headEnabled: boolean): void {
   if (method === "HEAD" && !headEnabled) {
-    throw new Error("HEAD_DISABLED");
+    throwRasterApiError(RasterApiErrorCode.HEAD_DISABLED);
   }
 }
 
 function assertRasterTileCoordinates(z: number, x: number, y: number): void {
   const maxZoom = 30;
   if (z > maxZoom) {
-    throw new Error("RASTER_BAD_COORDINATES");
+    throwRasterApiError(RasterApiErrorCode.BAD_COORDINATES);
   }
   const maxIndex = 2 ** z;
   if (x >= maxIndex || y >= maxIndex) {
-    throw new Error("RASTER_BAD_COORDINATES");
+    throwRasterApiError(RasterApiErrorCode.BAD_COORDINATES);
   }
 }
 
 function assertStaticRequestBounds(zoom: number, width: number, height: number): void {
   if (zoom > maxStaticZoom) {
-    throw new Error("STATIC_BAD_REQUEST");
+    throwRasterApiError(RasterApiErrorCode.STATIC_BAD_REQUEST);
   }
   if (width > maxStaticDimension || height > maxStaticDimension) {
-    throw new Error("STATIC_BAD_REQUEST");
+    throwRasterApiError(RasterApiErrorCode.STATIC_BAD_REQUEST);
   }
 }
 
 function assertStaticCoordinates(lon: number, lat: number): void {
   if (lon < -180 || lon > 180 || lat < -90 || lat > 90) {
-    throw new Error("STATIC_BAD_REQUEST");
+    throwRasterApiError(RasterApiErrorCode.STATIC_BAD_REQUEST);
   }
 }
 
@@ -112,105 +116,103 @@ function mapDenyStatus(reason?: string): number {
   return reason === "ACCESS_RATE_LIMITED" || reason === "ACCESS_QUOTA_EXCEEDED" ? 429 : reason === "ACCESS_ORIGIN_DENIED" ? 403 : reason === "ACCESS_UNAUTHORIZED" ? 401 : 400;
 }
 
+function renderTimeoutMs(): number {
+  const raw = process.env.RENDER_TIMEOUT_MS;
+  if (raw === undefined) {
+    return defaultRenderTimeoutMs;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
+    return defaultRenderTimeoutMs;
+  }
+  return parsed;
+}
+
+function buildRasterRequest(match: RegExpExecArray, styleId: string): RasterPathMatch {
+  const z = toInteger(match[2] ?? "", RasterApiErrorCode.BAD_COORDINATES);
+  const x = toInteger(match[3] ?? "", RasterApiErrorCode.BAD_COORDINATES);
+  const y = toInteger(match[4] ?? "", RasterApiErrorCode.BAD_COORDINATES);
+  assertRasterTileCoordinates(z, x, y);
+  return {
+    styleId,
+    format: (match[5] ?? "png") as "png" | "webp",
+    request: {
+      kind: "raster",
+      z,
+      x,
+      y,
+    },
+  };
+}
+
+function buildStaticRequest(match: RegExpExecArray, styleId: string): RasterPathMatch {
+  const lon = toNumber(match[2] ?? "", RasterApiErrorCode.STATIC_BAD_REQUEST);
+  const lat = toNumber(match[3] ?? "", RasterApiErrorCode.STATIC_BAD_REQUEST);
+  const zoom = toNumber(match[4] ?? "", RasterApiErrorCode.STATIC_BAD_REQUEST);
+  const width = toInteger(match[5] ?? "", RasterApiErrorCode.STATIC_BAD_REQUEST);
+  const height = toInteger(match[6] ?? "", RasterApiErrorCode.STATIC_BAD_REQUEST);
+  assertStaticCoordinates(lon, lat);
+  assertStaticRequestBounds(zoom, width, height);
+  return {
+    styleId,
+    format: (match[7] ?? "png") as "png" | "webp",
+    request: {
+      kind: "static",
+      lon,
+      lat,
+      zoom,
+      width,
+      height,
+    },
+  };
+}
+
 function parseRasterPath(path: string): RasterPathMatch {
   const normalized = stripV1Prefix(path);
   if (normalized.startsWith("/raster/")) {
     const match = rasterPathRegex.exec(normalized);
     if (!match || match.length !== 6) {
-      throw new Error("RASTER_BAD_COORDINATES");
+      throwRasterApiError(RasterApiErrorCode.BAD_COORDINATES);
     }
     let styleId: string;
     try {
-      styleId = normalizeStyleIdSegment(match[1] ?? "", "RASTER_BAD_COORDINATES");
+      styleId = normalizeStyleIdSegment(match[1] ?? "", RasterApiErrorCode.BAD_COORDINATES);
     } catch {
-      throw new Error("RASTER_BAD_COORDINATES");
+      throwRasterApiError(RasterApiErrorCode.BAD_COORDINATES);
     }
-    return {
-      styleId,
-      format: (match[5] ?? "png") as "png" | "webp",
-      request: (() => {
-        const z = toInteger(match[2] ?? "");
-        const x = toInteger(match[3] ?? "");
-        const y = toInteger(match[4] ?? "");
-        assertRasterTileCoordinates(z, x, y);
-        return {
-          kind: "raster" as const,
-          z,
-          x,
-          y,
-        };
-      })(),
-    };
+    return buildRasterRequest(match, styleId);
   }
-    if (normalized.startsWith("/static/")) {
-      const match = staticPathRegex.exec(normalized);
-      if (!match || match.length !== 8) {
-        throw new Error("STATIC_BAD_REQUEST");
-      }
+  if (normalized.startsWith("/static/")) {
+    const match = staticPathRegex.exec(normalized);
+    if (!match || match.length !== 8) {
+      throwRasterApiError(RasterApiErrorCode.STATIC_BAD_REQUEST);
+    }
     let styleId: string;
     try {
-      styleId = normalizeStyleIdSegment(match[1] ?? "", "STATIC_BAD_REQUEST");
+      styleId = normalizeStyleIdSegment(match[1] ?? "", RasterApiErrorCode.STATIC_BAD_REQUEST);
     } catch {
-      throw new Error("STATIC_BAD_REQUEST");
+      throwRasterApiError(RasterApiErrorCode.STATIC_BAD_REQUEST);
     }
-      return {
-        styleId,
-        format: (match[7] ?? "png") as "png" | "webp",
-        request: (() => {
-          const lon = toNumber(match[2] ?? "");
-          const lat = toNumber(match[3] ?? "");
-          const zoom = toNumber(match[4] ?? "");
-          const width = toInteger(match[5] ?? "");
-          const height = toInteger(match[6] ?? "");
-          assertStaticCoordinates(lon, lat);
-          assertStaticRequestBounds(zoom, width, height);
-          return {
-            kind: "static" as const,
-            lon,
-            lat,
-            zoom,
-            width,
-            height,
-          };
-        })(),
-      };
+    return buildStaticRequest(match, styleId);
   }
-  throw new Error("RASTER_BAD_COORDINATES");
+  throwRasterApiError(RasterApiErrorCode.BAD_COORDINATES);
 }
 
-function normalizeStyleIdSegment(value: string, errorCode: "RASTER_BAD_COORDINATES" | "STATIC_BAD_REQUEST"): string {
+function normalizeStyleIdSegment(
+  value: string,
+  errorCode: RasterApiErrorCode.BAD_COORDINATES | RasterApiErrorCode.STATIC_BAD_REQUEST,
+): string {
   let decoded: string;
   try {
     decoded = decodeURIComponent(value);
   } catch {
-    throw new Error(errorCode);
+    throwRasterApiError(errorCode);
   }
   const normalized = decoded.trim();
   if (normalized.length === 0 || normalized.includes("/")) {
-    throw new Error(errorCode);
+    throwRasterApiError(errorCode);
   }
   return normalized;
-}
-
-function asRenderRequest(match: RasterPathMatch): RasterTileRequest | StaticMapRequest {
-  if (match.request.kind === "raster") {
-    return {
-      styleId: match.styleId,
-      z: match.request.z,
-      x: match.request.x,
-      y: match.request.y,
-      format: match.format,
-    };
-  }
-  return {
-    styleId: match.styleId,
-    lon: match.request.lon,
-    lat: match.request.lat,
-    zoom: match.request.zoom,
-    width: match.request.width,
-    height: match.request.height,
-    format: match.format,
-  };
 }
 
 function parseOverlays(query: RasterRequest["query"]): string[] {
@@ -258,7 +260,7 @@ function buildPreflightHeaders(origin?: string): RasterResponse["headers"] {
 }
 
 function asAuthorizeContext(input: RasterRequest): AuthorizeContext {
-  const headers = normalizeHeaderMap(input.headers as Record<string, string | undefined>);
+  const headers = normalizeHeaderMap(input.headers);
   return {
     method: input.method,
     path: normalizePath(stripV1Prefix(input.path)),
@@ -269,13 +271,45 @@ function asAuthorizeContext(input: RasterRequest): AuthorizeContext {
   };
 }
 
+function mapParseFailure(
+  error: unknown,
+  expectedKind?: "raster" | "static",
+): RasterApiErrorCode.BAD_COORDINATES | RasterApiErrorCode.STATIC_BAD_REQUEST {
+  if (error instanceof RasterApiError && error.code === RasterApiErrorCode.STATIC_BAD_REQUEST) {
+    return RasterApiErrorCode.STATIC_BAD_REQUEST;
+  }
+  if (expectedKind === "static") {
+    return RasterApiErrorCode.STATIC_BAD_REQUEST;
+  }
+  return RasterApiErrorCode.BAD_COORDINATES;
+}
+
+function isExpectedKind(match: RasterPathMatch, expectedKind?: "raster" | "static"): boolean {
+  return expectedKind === undefined || match.request.kind === expectedKind;
+}
+
+async function withRenderTimeout<T>(work: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new RenderError(RenderErrorCode.BACKEND_UNAVAILABLE, "timeout"));
+    }, renderTimeoutMs());
+    work.then((result) => {
+      clearTimeout(timeout);
+      resolve(result);
+    }).catch((error: unknown) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+  });
+}
+
 async function handleRasterRequest(
   input: RasterRequest,
   expectedKind?: "raster" | "static",
 ): Promise<RasterResponse> {
   const path = normalizePath(input.path);
-  const headers = normalizeHeaderMap(input.headers as Record<string, string | undefined>);
-  const origin = normalizeOrigin(headers);
+  const requestHeaders = normalizeHeaderMap(input.headers);
+  const origin = normalizeOrigin(requestHeaders);
   const errorHeaders = {
     ...buildPreflightHeaders(origin),
     "content-type": "application/json",
@@ -284,8 +318,8 @@ async function handleRasterRequest(
   if (isOptions(input)) {
     try {
       const parsed = parseRasterPath(path);
-      if (expectedKind && parsed.request.kind !== expectedKind) {
-        throw new Error(expectedKind === "static" ? "STATIC_BAD_REQUEST" : "RASTER_BAD_COORDINATES");
+      if (!isExpectedKind(parsed, expectedKind)) {
+        throwRasterApiError(expectedKind === "static" ? RasterApiErrorCode.STATIC_BAD_REQUEST : RasterApiErrorCode.BAD_COORDINATES);
       }
       return {
         status: 204,
@@ -295,8 +329,7 @@ async function handleRasterRequest(
         },
       };
     } catch (error) {
-      const message = error instanceof Error ? error.message : "RASTER_BAD_COORDINATES";
-      const mappedMessage = message === "STATIC_BAD_REQUEST" ? "STATIC_BAD_REQUEST" : "RASTER_BAD_COORDINATES";
+      const mappedMessage = mapParseFailure(error, expectedKind);
       return {
         status: 400,
         body: encodeJsonError(mappedMessage),
@@ -306,8 +339,8 @@ async function handleRasterRequest(
   }
   try {
     const match = parseRasterPath(path);
-    if (expectedKind && match.request.kind !== expectedKind) {
-      throw new Error(expectedKind === "static" ? "STATIC_BAD_REQUEST" : "RASTER_BAD_COORDINATES");
+    if (!isExpectedKind(match, expectedKind)) {
+      throwRasterApiError(expectedKind === "static" ? RasterApiErrorCode.STATIC_BAD_REQUEST : RasterApiErrorCode.BAD_COORDINATES);
     }
     const config = loadConfig();
     assertHeadEnabled(input.method, config.tileDeliveryPolicy.headEnabled);
@@ -325,78 +358,93 @@ async function handleRasterRequest(
       };
     }
     let image: RenderedImage;
-    const request = asRenderRequest(match);
     if (match.request.kind === "raster") {
-      image = await renderRasterTile(request as RasterTileRequest);
+      const rasterRequest: RasterTileRequest = {
+        styleId: match.styleId,
+        z: match.request.z,
+        x: match.request.x,
+        y: match.request.y,
+        format: match.format,
+      };
+      image = await withRenderTimeout(renderRasterTile(rasterRequest));
     } else {
-      const staticRequest = request as StaticMapRequest;
-      image = await renderStaticMap({
+      const staticRequest: StaticMapRequest = {
+        styleId: match.styleId,
+        lon: match.request.lon,
+        lat: match.request.lat,
+        zoom: match.request.zoom,
+        width: match.request.width,
+        height: match.request.height,
+        format: match.format,
+      };
+      image = await withRenderTimeout(renderStaticMap({
         ...staticRequest,
         overlays: parseOverlays(input.query),
-      });
+      }));
     }
-    const headers = buildHeaders(auth, image, cors, config.tileDeliveryPolicy.cacheTtlSeconds);
+    const responseHeaders = buildHeaders(auth, image, cors, config.tileDeliveryPolicy.cacheTtlSeconds);
     if (input.method === "HEAD") {
       return {
         status: 200,
         body: undefined,
-        headers,
+        headers: responseHeaders,
       };
     }
     return {
       status: 200,
       body: image.bytes,
-      headers,
+      headers: responseHeaders,
     };
   } catch (error) {
-    if ((error as Error).message === "HEAD_DISABLED") {
-      return {
-        status: 405,
-        body: undefined,
-        headers: errorHeaders,
-      };
-    }
-    if (error instanceof Error) {
-      const message = error.message;
-      if (message === "RASTER_BAD_COORDINATES" || message === "STATIC_BAD_REQUEST") {
-        return {
-          status: 400,
-          body: encodeJsonError(message),
-          headers: errorHeaders,
-        };
-      }
-      if (message === "RENDER_STYLE_NOT_FOUND") {
+    if (error instanceof RenderError) {
+      if (error.code === RenderErrorCode.STYLE_NOT_FOUND) {
         return {
           status: 404,
-          body: encodeJsonError("RASTER_STYLE_NOT_FOUND"),
+          body: encodeJsonError(RasterApiErrorCode.STYLE_NOT_FOUND),
           headers: errorHeaders,
         };
       }
-      if (message === "RENDER_TILE_RESOLVE_FAILED") {
+      if (error.code === RenderErrorCode.TILE_RESOLVE_FAILED) {
         return {
           status: 502,
-          body: encodeJsonError("RASTER_RENDER_FAILED"),
+          body: encodeJsonError(RasterApiErrorCode.RENDER_FAILED),
           headers: errorHeaders,
         };
       }
-      if (message === "RENDER_BACKEND_UNAVAILABLE") {
+      if (error.code === RenderErrorCode.BACKEND_UNAVAILABLE) {
         return {
           status: 503,
-          body: encodeJsonError("RASTER_RENDER_FAILED"),
+          body: encodeJsonError(RasterApiErrorCode.RENDER_FAILED),
           headers: errorHeaders,
         };
       }
-      if (message === "RENDER_BAD_REQUEST") {
+      if (error.code === RenderErrorCode.BAD_REQUEST) {
         return {
           status: 400,
-          body: encodeJsonError("RASTER_BAD_REQUEST"),
+          body: encodeJsonError(RasterApiErrorCode.BAD_REQUEST),
+          headers: errorHeaders,
+        };
+      }
+    }
+    if (error instanceof RasterApiError) {
+      if (error.code === RasterApiErrorCode.HEAD_DISABLED) {
+        return {
+          status: 405,
+          body: undefined,
+          headers: errorHeaders,
+        };
+      }
+      if (error.code === RasterApiErrorCode.BAD_COORDINATES || error.code === RasterApiErrorCode.STATIC_BAD_REQUEST) {
+        return {
+          status: 400,
+          body: encodeJsonError(error.code),
           headers: errorHeaders,
         };
       }
     }
     return {
       status: 500,
-      body: encodeJsonError("RASTER_RENDER_FAILED"),
+      body: encodeJsonError(RasterApiErrorCode.RENDER_FAILED),
       headers: errorHeaders,
     };
   }

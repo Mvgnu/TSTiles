@@ -311,26 +311,19 @@ process.env.CACHE_WARN_THRESHOLD = "0.9";
 process.env.CACHE_CRITICAL_THRESHOLD = "0.7";
 process.env.OBSERVABILITY_ENABLED = "true";
 process.env.OBS_ALERT_FORCE_FAIL = "true";
-let alertDispatchFailed = false;
-try {
-  evaluateTileSLOs({
-    schemaVersion: 1,
-    artifactVersion: "artifact-alert-fail",
-    tilePath: "/tiles/1/1/1.mvt",
-    cacheStatus: "miss",
-    originRead: true,
-    responseBytes: 32,
-    latencyMs: 3,
-    statusCode: 200,
-    normalizedMethod: "GET",
-    receivedAt: "2026-01-01T00:15:00.000Z",
-  });
-} catch (error: unknown) {
-  alertDispatchFailed = true;
-  assert.ok(error instanceof ObservabilityError);
-  assert.equal((error as ObservabilityError).code, ObservabilityErrorCode.ALERT_DISPATCH_FAILED);
-}
-assert.equal(alertDispatchFailed, true);
+const alertDispatchFailureSuppressed = evaluateTileSLOs({
+  schemaVersion: 1,
+  artifactVersion: "artifact-alert-fail",
+  tilePath: "/tiles/1/1/1.mvt",
+  cacheStatus: "miss",
+  originRead: true,
+  responseBytes: 32,
+  latencyMs: 3,
+  statusCode: 200,
+  normalizedMethod: "GET",
+  receivedAt: "2026-01-01T00:15:00.000Z",
+});
+assert.equal(alertDispatchFailureSuppressed.artifactVersion, "artifact-alert-fail");
 
 process.env.OBSERVABILITY_ENABLED = "false";
 const alertFailureSuppressedWhenDisabled = evaluateTileSLOs({
@@ -395,4 +388,53 @@ test("observability clamps stale timestamps into bounded windows", () => {
     assert.equal(stale.window.windowStart >= oldestRetainedWindowStart, true);
     assert.equal(fresh.window.totalRequests, 1);
   });
+});
+
+test("observability evaluates status from runtime thresholds", () => {
+  Object.assign(process.env, {
+    OBJECT_STORE_BUCKET: "test-bucket",
+    ADMIN_TOKEN: "admin-token",
+    ALLOWED_ORIGINS: "*",
+    NODE_ENV: "development",
+    OBSERVABILITY_ENABLED: "false",
+    CACHE_WARN_THRESHOLD: "0.75",
+    CACHE_CRITICAL_THRESHOLD: "0.65",
+    ERROR_WARN_THRESHOLD: "0.05",
+    ERROR_CRITICAL_THRESHOLD: "0.10",
+  });
+
+  const baseSignal = {
+    schemaVersion: CONTRACT_SCHEMA_VERSION,
+    artifactVersion: "artifact-runtime-policy",
+    tilePath: "/tiles/9/9/9.mvt",
+    originRead: true,
+    responseBytes: 32,
+    latencyMs: 3,
+    statusCode: 200,
+    normalizedMethod: "GET" as const,
+    receivedAt: "2026-03-01T10:05:00.000Z",
+  };
+
+  evaluateTileSLOs({
+    ...baseSignal,
+    cacheStatus: "hit",
+  });
+  evaluateTileSLOs({
+    ...baseSignal,
+    cacheStatus: "hit",
+  });
+  evaluateTileSLOs({
+    ...baseSignal,
+    cacheStatus: "hit",
+  });
+  evaluateTileSLOs({
+    ...baseSignal,
+    cacheStatus: "hit",
+  });
+  const fifth = evaluateTileSLOs({
+    ...baseSignal,
+    cacheStatus: "miss",
+  });
+  assert.equal(fifth.status, "ok");
+  assert.equal(fifth.cacheHitRatio, 0.8);
 });

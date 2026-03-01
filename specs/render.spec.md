@@ -10,12 +10,13 @@ exports:
   - RasterTileRequest
   - StaticMapRequest
   - RenderedImage
+  - RenderError
+  - RenderErrorCode
   - renderRasterTile
   - renderStaticMap
 consumes:
   - styles.getStyle
   - tile_resolver.resolveVectorTile
-  - config.RuntimeConfig
 verification:
   typecheck: "npx tsc --noEmit"
   test: "vitest run src/domains/render/__tests__/ --globals --passWithNoTests"
@@ -54,5 +55,5 @@ Owns raster tile and static image rendering, isolated from vector hot-path deliv
 
 ## Dependency Direction
 
-- May depend on `styles`, `tile_resolver`, and `config`.
+- May depend on `styles` and `tile_resolver`.
 - Must not depend on HTTP routing domains (`tile_api`, `raster_api`).

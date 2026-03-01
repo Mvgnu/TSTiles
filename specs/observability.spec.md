@@ -38,7 +38,7 @@ Owns cache ratio monitoring, origin egress tracking, and operational alerts for 
 ## Public API Contract
 
 - `evaluateTileSLOs(signal: DeliverySignal): CacheHealthSignal`
-- `classifySLOBreach(window: TileTrafficWindow): "ok" | "warn" | "critical"`
+- `classifySLOBreach(window: TileTrafficWindow, policy?): "ok" | "warn" | "critical"`
 
 ## Owned Invariants
 
@@ -51,7 +51,6 @@ Owns cache ratio monitoring, origin egress tracking, and operational alerts for 
 
 - `OBS_SIGNAL_SCHEMA_INVALID`
 - `OBS_SLO_THRESHOLD_MISCONFIGURED`
-- `OBS_ALERT_DISPATCH_FAILED`
 
 ## Caching Semantics
 

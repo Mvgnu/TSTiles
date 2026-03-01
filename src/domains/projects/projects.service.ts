@@ -23,13 +23,17 @@ function buildProjectsPolicyError(message: string): Error {
   return new Error(`PROJECTS_POLICY_INVALID:${message}`);
 }
 
-function normalizeToken(raw: string | undefined): string {
+function normalizeToken(raw: string | undefined): string | undefined {
   if (!raw) {
-    return "";
+    return undefined;
   }
   const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
   if (trimmed.toLowerCase().startsWith("bearer ")) {
-    return trimmed.slice(7).trim();
+    const bearerToken = trimmed.slice(7).trim();
+    return bearerToken.length > 0 ? bearerToken : undefined;
   }
   return trimmed;
 }
@@ -79,6 +83,18 @@ function normalizePlanId(planId: string | undefined): string {
     throw buildProjectsPolicyError("planId must be alphanumeric (plus _ or -)");
   }
   return trimmed.toLowerCase();
+}
+
+function buildProjectId(name: string): string {
+  const base = name.replace(/\W+/g, "-").replace(/^-+|-+$/g, "").toLowerCase() || "project";
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const suffix = randomUUID().replace(/-/g, "").slice(0, 10);
+    const candidate = `${base}-${suffix}`;
+    if (!projects.has(candidate)) {
+      return candidate;
+    }
+  }
+  throw buildProjectsPolicyError("unable to allocate unique project id");
 }
 
 function validateAllowedOrigins(origins: unknown): readonly string[] | undefined {
@@ -198,12 +214,13 @@ function bootstrapLegacyProjects(): void {
   if (initialized) {
     return;
   }
+  // Mark initialization before seeding to avoid recursive bootstrap via exported createProject().
   initialized = true;
   const config = loadConfig();
   if (config.security.allowedTokens.length === 0) {
     return;
   }
-  const legacy = createProject({
+  const legacy = createProjectRecord({
     name: "legacy",
   });
   for (const rawToken of config.security.allowedTokens) {
@@ -280,10 +297,14 @@ export function getProjectPolicy(projectId: string): Project["policy"] {
 
 export function createProject(input: ProjectCreationInput): Project {
   bootstrapLegacyProjects();
+  return createProjectRecord(input);
+}
+
+function createProjectRecord(input: ProjectCreationInput): Project {
   const name = normalizeProjectName(input.name);
   const normalizedPlanId = normalizePlanId(input.planId);
   const project: Project = {
-    id: name.replace(/\W+/g, "-").toLowerCase() + `-${randomUUID().slice(0, 6)}`,
+    id: buildProjectId(name),
     name,
     policy: deriveProjectPolicy(input.policy),
     planId: normalizedPlanId,
@@ -300,6 +321,51 @@ export function rotateApiKey(projectId: string): ApiKeyRecord {
   if (!project) {
     throw new Error("PROJECTS_PROJECT_NOT_FOUND");
   }
+  for (const [keyHash, record] of apiKeys.entries()) {
+    if (record.projectId === project.id && !record.revoked) {
+      apiKeys.set(keyHash, {
+        ...record,
+        revoked: true,
+      });
+    }
+  }
   const rawKey = randomBytes(24).toString("base64url");
   return registerApiKey(project.id, rawKey);
+}
+
+export function revokeApiKey(projectId: string, keyId: string): ApiKeyRecord {
+  bootstrapLegacyProjects();
+  const normalizedProjectId = normalizeProjectId(projectId);
+  const normalizedKeyId = keyId.trim();
+  if (normalizedKeyId.length === 0) {
+    throw new Error("PROJECTS_KEY_INVALID");
+  }
+  for (const [hash, record] of apiKeys.entries()) {
+    if (record.projectId !== normalizedProjectId || record.keyId !== normalizedKeyId) {
+      continue;
+    }
+    if (record.revoked) {
+      return record;
+    }
+    const revokedRecord: ApiKeyRecord = {
+      ...record,
+      revoked: true,
+    };
+    apiKeys.set(hash, revokedRecord);
+    return revokedRecord;
+  }
+  throw new Error("PROJECTS_KEY_INVALID");
+}
+
+export function deleteProject(projectId: string): void {
+  bootstrapLegacyProjects();
+  const normalizedProjectId = normalizeProjectId(projectId);
+  if (!projects.delete(normalizedProjectId)) {
+    throw new Error("PROJECTS_PROJECT_NOT_FOUND");
+  }
+  for (const [hash, record] of apiKeys.entries()) {
+    if (record.projectId === normalizedProjectId) {
+      apiKeys.delete(hash);
+    }
+  }
 }

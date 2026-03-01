@@ -1,8 +1,10 @@
 import { strict as assert } from "node:assert";
 import {
   createProject,
+  deleteProject,
   getProjectPolicy,
   listProjects,
+  revokeApiKey,
   resolveProjectIdentity,
   verifyApiKey,
   rotateApiKey,
@@ -84,6 +86,29 @@ test("project rotation returns distinct active key identities", () => {
   assert.equal(first.keyHash === second.keyHash, false);
   assert.equal(first.revoked, false);
   assert.equal(second.revoked, false);
+
+  const revokedFirst = revokeApiKey(project.id, first.keyId);
+  assert.equal(revokedFirst.revoked, true);
+});
+
+test("revokeApiKey and deleteProject enforce lifecycle controls", () => {
+  const project = createProject({
+    name: "Project Gamma",
+  });
+  const key = rotateApiKey(project.id);
+
+  const revoked = revokeApiKey(project.id, key.keyId);
+  assert.equal(revoked.revoked, true);
+
+  const resolved = resolveProjectIdentity({
+    rawToken: key.keyHash,
+  });
+  assert.equal(resolved, null);
+
+  deleteProject(project.id);
+  assert.throws(() => {
+    getProjectPolicy(project.id);
+  }, /PROJECTS_PROJECT_NOT_FOUND/);
 });
 
 test("createProject rejects invalid policy input", () => {

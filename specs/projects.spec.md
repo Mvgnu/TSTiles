@@ -17,6 +17,8 @@ exports:
   - listProjects
   - createProject
   - rotateApiKey
+  - revokeApiKey
+  - deleteProject
   - getProjectPolicy
 consumes:
   - config.SecurityConfig
@@ -43,6 +45,8 @@ Owns everything that turns a provided API token into a sanitized project identit
 - `listProjects(): Project[]`
 - `createProject(input): Project`
 - `rotateApiKey(projectId: string): ApiKeyRecord`
+- `revokeApiKey(projectId: string, keyId: string): ApiKeyRecord`
+- `deleteProject(projectId: string): void`
 - `getProjectPolicy(projectId: string): ProjectPolicy`
 
 ## Project Policy Surface
@@ -55,7 +59,7 @@ Owns everything that turns a provided API token into a sanitized project identit
 ## Owned Invariants
 
 - Never returns raw token values; only key identifiers and hashed key identities.
-- Supports multiple active keys per project for key rotation.
+- Key rotation revokes previously active keys for the project before issuing a new one.
 - Store adapters are deterministic, unit-testable, and side-effect minimal.
 
 ## Error Taxonomy

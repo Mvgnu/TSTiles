@@ -16,6 +16,13 @@ const WINDOW_MS = 15 * 60 * 1000;
 const WINDOW_RETENTION_COUNT = 3;
 const MAX_FUTURE_SKEW_MS = WINDOW_MS;
 
+interface SLOThresholdPolicy {
+  readonly cacheWarnThreshold: number;
+  readonly cacheCriticalThreshold: number;
+  readonly errorWarnThreshold: number;
+  readonly errorCriticalThreshold: number;
+}
+
 function normalizeSignalPath(path: string): string {
   const [withoutQuery] = path.split("?");
   const normalizedPath = withoutQuery || "/";
@@ -81,6 +88,8 @@ function validateSignal(signal: unknown): DeliverySignal {
   const tilePath = typeof candidate.tilePath === "string"
     ? candidate.tilePath.trim()
     : "";
+  const normalizedMethod = candidate.normalizedMethod;
+  const schemaVersion = candidate.schemaVersion;
   if (
     artifactVersion.length === 0 ||
     tilePath.length === 0 ||
@@ -101,33 +110,27 @@ function validateSignal(signal: unknown): DeliverySignal {
     typeof candidate.receivedAt !== "string" ||
     candidate.receivedAt.length === 0 ||
     Number.isNaN(Date.parse(candidate.receivedAt)) ||
-    candidate.schemaVersion !== CONTRACT_SCHEMA_VERSION ||
-    !["GET", "HEAD", "OPTIONS"].includes(String(candidate.normalizedMethod)) ||
-    typeof candidate.schemaVersion !== "number" ||
-    candidate.schemaVersion < 1
+    typeof schemaVersion !== "number" ||
+    schemaVersion !== CONTRACT_SCHEMA_VERSION ||
+    (normalizedMethod !== "GET" && normalizedMethod !== "HEAD" && normalizedMethod !== "OPTIONS")
   ) {
     throw new ObservabilityError(ObservabilityErrorCode.SIGNAL_SCHEMA_INVALID, "Invalid delivery signal");
   }
   return {
-    schemaVersion: candidate.schemaVersion as DeliverySignal["schemaVersion"],
+    schemaVersion: CONTRACT_SCHEMA_VERSION,
     artifactVersion,
     tilePath,
-    cacheStatus: candidate.cacheStatus as DeliverySignal["cacheStatus"],
-    originRead: candidate.originRead as DeliverySignal["originRead"],
-    responseBytes: candidate.responseBytes as DeliverySignal["responseBytes"],
-    latencyMs: candidate.latencyMs as DeliverySignal["latencyMs"],
-    statusCode: candidate.statusCode as DeliverySignal["statusCode"],
-    normalizedMethod: candidate.normalizedMethod as DeliverySignal["normalizedMethod"],
-    receivedAt: candidate.receivedAt as DeliverySignal["receivedAt"],
+    cacheStatus: candidate.cacheStatus,
+    originRead: candidate.originRead,
+    responseBytes: candidate.responseBytes,
+    latencyMs: candidate.latencyMs,
+    statusCode: candidate.statusCode,
+    normalizedMethod,
+    receivedAt: candidate.receivedAt,
   };
 }
 
-function validatePolicy(policy: {
-  readonly cacheWarnThreshold: number;
-  readonly cacheCriticalThreshold: number;
-  readonly errorWarnThreshold: number;
-  readonly errorCriticalThreshold: number;
-}): void {
+function validatePolicy(policy: SLOThresholdPolicy): void {
   if (
     !isSLOWindowNumber(policy.cacheWarnThreshold) ||
     !isSLOWindowNumber(policy.cacheCriticalThreshold) ||
@@ -153,11 +156,11 @@ function validatePolicy(policy: {
 
 export function classifySLOBreach(
   window: Pick<TileTrafficWindow, "cacheHits" | "totalRequests" | "errors">,
+  policy: SLOThresholdPolicy = defaultPolicy(),
 ): SLOStatus {
   if (window.totalRequests === 0) {
     return "ok";
   }
-  const policy = defaultPolicy();
   const cacheHitRatio = window.cacheHits / window.totalRequests;
   const errorRate = window.errors / window.totalRequests;
   if (cacheHitRatio < policy.cacheCriticalThreshold || errorRate > policy.errorCriticalThreshold) {
@@ -180,8 +183,6 @@ export function evaluateTileSLOs(signal: DeliverySignal): CacheHealthSignal {
       "Observability configuration is invalid",
     );
   }
-  const policy = defaultPolicy();
-  validatePolicy(policy);
   validatePolicy(config.observability);
   const endpointGroup = buildEndpointGroup(validated.tilePath);
   const now = Date.now();
@@ -197,7 +198,7 @@ export function evaluateTileSLOs(signal: DeliverySignal): CacheHealthSignal {
     cacheHits: 0,
     originReads: 0,
     errors: 0,
-    durationMs: 0,
+    windowAgeMs: 0,
   };
 
   const next: TileTrafficWindow = {
@@ -206,30 +207,13 @@ export function evaluateTileSLOs(signal: DeliverySignal): CacheHealthSignal {
     cacheHits: previous.cacheHits + (validated.cacheStatus === "hit" ? 1 : 0),
     originReads: previous.originReads + (validated.originRead ? 1 : 0),
     errors: previous.errors + (validated.statusCode >= 400 ? 1 : 0),
-    durationMs: now - previous.windowStart,
+    windowAgeMs: now - previous.windowStart,
   };
 
   windows.set(key, next);
-  const cacheHitRatio = next.totalRequests === 0 ? 0 : next.cacheHits / next.totalRequests;
-  const errorRate = next.totalRequests === 0 ? 0 : next.errors / next.totalRequests;
-  const baseStatus = classifySLOBreach(next);
-  let status = baseStatus;
-  if (
-    cacheHitRatio >= config.observability.cacheWarnThreshold &&
-    errorRate <= config.observability.errorWarnThreshold
-  ) {
-    status = "ok";
-  } else if (
-    cacheHitRatio < config.observability.cacheCriticalThreshold ||
-    errorRate > config.observability.errorCriticalThreshold
-  ) {
-    status = "critical";
-  } else if (
-    cacheHitRatio < config.observability.cacheWarnThreshold ||
-    errorRate > config.observability.errorWarnThreshold
-  ) {
-    status = "warn";
-  }
+  const cacheHitRatio = next.cacheHits / next.totalRequests;
+  const errorRate = next.errors / next.totalRequests;
+  const status = classifySLOBreach(next, config.observability);
   const signalResult: CacheHealthSignal = {
     artifactVersion: validated.artifactVersion,
     endpointGroup: next.endpointGroup,
@@ -249,10 +233,7 @@ export function evaluateTileSLOs(signal: DeliverySignal): CacheHealthSignal {
   try {
     dispatchAlert(signalResult, config.observability.enabled);
   } catch {
-    throw new ObservabilityError(
-      ObservabilityErrorCode.ALERT_DISPATCH_FAILED,
-      "Unable to dispatch observability alert",
-    );
+    // Alert delivery is best-effort and must not fail SLO computation.
   }
   return signalResult;
 }

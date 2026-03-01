@@ -24,7 +24,7 @@ export interface TileTrafficWindow {
   readonly cacheHits: number;
   readonly originReads: number;
   readonly errors: number;
-  readonly durationMs: number;
+  readonly windowAgeMs: number;
 }
 
 export type SLOStatus = "ok" | "warn" | "critical";
@@ -35,5 +35,5 @@ export interface CacheHealthSignal {
   readonly status: SLOStatus;
   readonly cacheHitRatio: number;
   readonly errorRate: number;
-  readonly window: Omit<TileTrafficWindow, "durationMs">;
+  readonly window: Omit<TileTrafficWindow, "windowAgeMs">;
 }
