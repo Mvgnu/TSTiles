@@ -71,14 +71,32 @@ test("docs routes enforce path matching", async (): Promise<void> => {
   const badIndex = await docsIndexRoute({ method: "GET", path: "/docs/wrong" });
   assert.equal(badIndex.status, 404);
   assert.equal(badIndex.headers["cache-control"], "no-store");
+  assert.equal(typeof badIndex.body, "string");
+
+  const badIndexHead = await docsIndexRoute({ method: "HEAD", path: "/docs/wrong" });
+  assert.equal(badIndexHead.status, 404);
+  assert.equal(badIndexHead.headers["cache-control"], "no-store");
+  assert.equal(badIndexHead.body, undefined);
 
   const badOpenApi = await docsOpenApiRoute({ method: "GET", path: "/docs/openapi" });
   assert.equal(badOpenApi.status, 404);
   assert.equal(badOpenApi.headers["cache-control"], "no-store");
+  assert.equal(typeof badOpenApi.body, "string");
+
+  const badOpenApiHead = await docsOpenApiRoute({ method: "HEAD", path: "/docs/openapi" });
+  assert.equal(badOpenApiHead.status, 404);
+  assert.equal(badOpenApiHead.headers["cache-control"], "no-store");
+  assert.equal(badOpenApiHead.body, undefined);
 
   const badExamples = await docsExamplesRoute({ method: "OPTIONS", path: "/docs/examplez" });
   assert.equal(badExamples.status, 404);
   assert.equal(badExamples.headers["cache-control"], "no-store");
+  assert.equal(typeof badExamples.body, "string");
+
+  const badExamplesHead = await docsExamplesRoute({ method: "HEAD", path: "/docs/examplez" });
+  assert.equal(badExamplesHead.status, 404);
+  assert.equal(badExamplesHead.headers["cache-control"], "no-store");
+  assert.equal(badExamplesHead.body, undefined);
 
   const badMethodIndex = await docsIndexRoute({
     method: "POST" as unknown as "GET",

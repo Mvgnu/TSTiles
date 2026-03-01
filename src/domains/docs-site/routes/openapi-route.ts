@@ -31,6 +31,13 @@ function isOpenApiPath(path: string): boolean {
   return normalized === "/docs/openapi.json" || normalized === "/docs/openapi.json/";
 }
 
+function bodyForMethod(method: HttpMethod, body: string): string | undefined {
+  if (method === "HEAD") {
+    return undefined;
+  }
+  return body;
+}
+
 function byteLengthUtf8(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
@@ -39,7 +46,7 @@ export async function docsOpenApiRoute(input: OpenApiRequest): Promise<OpenApiRe
   if (!isOpenApiPath(input.path)) {
     return {
       status: 404,
-      body: JSON.stringify({ error: "DOCS_NOT_FOUND" }),
+      body: bodyForMethod(input.method, JSON.stringify({ error: "DOCS_NOT_FOUND" })),
       headers: {
         ...corsHeaders("GET,HEAD,OPTIONS"),
         "content-type": "application/json",
@@ -60,7 +67,7 @@ export async function docsOpenApiRoute(input: OpenApiRequest): Promise<OpenApiRe
   if (input.method !== "GET" && input.method !== "HEAD") {
     return {
       status: 400,
-      body: JSON.stringify({ error: "DOCS_BAD_REQUEST" }),
+      body: bodyForMethod(input.method, JSON.stringify({ error: "DOCS_BAD_REQUEST" })),
       headers: {
         ...corsHeaders("GET,HEAD,OPTIONS"),
         "content-type": "application/json",
