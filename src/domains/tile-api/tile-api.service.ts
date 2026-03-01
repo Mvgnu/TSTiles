@@ -115,36 +115,43 @@ function byteLengthUtf8(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
 
-function mapTileResolverError(error: ResolverError, headers: Record<string, string>): TileResponse {
+function responseBodyForMethod<T extends string | Uint8Array>(method: HttpMethod, body: T): T | undefined {
+  if (method === "HEAD") {
+    return undefined;
+  }
+  return body;
+}
+
+function mapTileResolverError(error: ResolverError, headers: Record<string, string>, method: HttpMethod): TileResponse {
   if (error.code === ResolverErrorCode.BAD_COORDINATES) {
     return {
       status: 400,
-      body: encodeJsonError(TileApiErrorCode.BAD_COORDINATES),
+      body: responseBodyForMethod(method, encodeJsonError(TileApiErrorCode.BAD_COORDINATES)),
       headers,
     };
   }
   if (error.code === ResolverErrorCode.TILE_NOT_FOUND) {
     return {
       status: 404,
-      body: encodeJsonError(TileApiErrorCode.NOT_FOUND),
+      body: responseBodyForMethod(method, encodeJsonError(TileApiErrorCode.NOT_FOUND)),
       headers,
     };
   }
   if (error.code === ResolverErrorCode.ARTIFACT_UNAVAILABLE) {
     return {
       status: 409,
-      body: encodeJsonError(TileApiErrorCode.ARTIFACT_UNAVAILABLE),
+      body: responseBodyForMethod(method, encodeJsonError(TileApiErrorCode.ARTIFACT_UNAVAILABLE)),
       headers,
     };
   }
   return {
     status: 502,
-    body: encodeJsonError(TileApiErrorCode.ORIGIN_READ_FAILED),
+    body: responseBodyForMethod(method, encodeJsonError(TileApiErrorCode.ORIGIN_READ_FAILED)),
     headers,
   };
 }
 
-function mapTileApiError(error: TileApiError, headers: Record<string, string>): TileResponse {
+function mapTileApiError(error: TileApiError, headers: Record<string, string>, method: HttpMethod): TileResponse {
   if (error.code === TileApiErrorCode.HEAD_DISABLED) {
     return {
       status: 405,
@@ -155,49 +162,49 @@ function mapTileApiError(error: TileApiError, headers: Record<string, string>): 
   if (error.code === TileApiErrorCode.BAD_REQUEST) {
     return {
       status: 400,
-      body: encodeJsonError(TileApiErrorCode.BAD_REQUEST),
+      body: responseBodyForMethod(method, encodeJsonError(TileApiErrorCode.BAD_REQUEST)),
       headers,
     };
   }
   if (error.code === TileApiErrorCode.BAD_COORDINATES) {
     return {
       status: 400,
-      body: encodeJsonError(TileApiErrorCode.BAD_COORDINATES),
+      body: responseBodyForMethod(method, encodeJsonError(TileApiErrorCode.BAD_COORDINATES)),
       headers,
     };
   }
   if (error.code === TileApiErrorCode.ARTIFACT_UNAVAILABLE) {
     return {
       status: 409,
-      body: encodeJsonError(TileApiErrorCode.ARTIFACT_UNAVAILABLE),
+      body: responseBodyForMethod(method, encodeJsonError(TileApiErrorCode.ARTIFACT_UNAVAILABLE)),
       headers,
     };
   }
   return {
     status: 500,
-    body: encodeJsonError(TileApiErrorCode.ORIGIN_READ_FAILED),
+    body: responseBodyForMethod(method, encodeJsonError(TileApiErrorCode.ORIGIN_READ_FAILED)),
     headers,
   };
 }
 
-function mapMetadataResolverError(error: ResolverError, headers: Record<string, string>): TileMetadataResponse {
+function mapMetadataResolverError(error: ResolverError, headers: Record<string, string>, method: HttpMethod): TileMetadataResponse {
   if (error.code === ResolverErrorCode.ARTIFACT_UNAVAILABLE) {
     return {
       status: 409,
-      body: JSON.stringify({ error: TileApiErrorCode.ARTIFACT_UNAVAILABLE }),
+      body: responseBodyForMethod(method, JSON.stringify({ error: TileApiErrorCode.ARTIFACT_UNAVAILABLE })),
       headers,
     };
   }
   if (error.code === ResolverErrorCode.TILE_NOT_FOUND) {
     return {
       status: 404,
-      body: JSON.stringify({ error: TileApiErrorCode.NOT_FOUND }),
+      body: responseBodyForMethod(method, JSON.stringify({ error: TileApiErrorCode.NOT_FOUND })),
       headers,
     };
   }
   return {
     status: 503,
-    body: JSON.stringify({ error: TileApiErrorCode.ORIGIN_READ_FAILED }),
+    body: responseBodyForMethod(method, JSON.stringify({ error: TileApiErrorCode.ORIGIN_READ_FAILED })),
     headers,
   };
 }
@@ -245,7 +252,7 @@ export async function handleTileRequest(input: TileRequest): Promise<TileRespons
     if (!auth.allow) {
       return {
         status: mapAccessStatus(auth.denyReason),
-        body: new TextEncoder().encode(JSON.stringify({ denied: true })),
+        body: responseBodyForMethod(input.method, new TextEncoder().encode(JSON.stringify({ denied: true }))),
         headers: {
           ...cors,
           "content-type": "application/json",
@@ -280,14 +287,14 @@ export async function handleTileRequest(input: TileRequest): Promise<TileRespons
     };
   } catch (error) {
     if (error instanceof ResolverError) {
-      return mapTileResolverError(error, errorHeaders);
+      return mapTileResolverError(error, errorHeaders, input.method);
     }
     if (error instanceof TileApiError) {
-      return mapTileApiError(error, errorHeaders);
+      return mapTileApiError(error, errorHeaders, input.method);
     }
     return {
       status: 500,
-      body: encodeJsonError(TileApiErrorCode.ORIGIN_READ_FAILED),
+      body: responseBodyForMethod(input.method, encodeJsonError(TileApiErrorCode.ORIGIN_READ_FAILED)),
       headers: errorHeaders,
     };
   }
@@ -334,7 +341,7 @@ export async function handleMetadataRequest(input: TileRequest): Promise<TileMet
     if (!auth.allow) {
       return {
         status: mapAccessStatus(auth.denyReason),
-        body: JSON.stringify({ denied: true }),
+        body: responseBodyForMethod(input.method, JSON.stringify({ denied: true })),
         headers: {
           ...cors,
           "content-type": "application/json",
@@ -344,7 +351,7 @@ export async function handleMetadataRequest(input: TileRequest): Promise<TileMet
     if (normalizedPath !== metadataPath) {
       return {
         status: 404,
-        body: JSON.stringify({ error: TileApiErrorCode.NOT_FOUND }),
+        body: responseBodyForMethod(input.method, JSON.stringify({ error: TileApiErrorCode.NOT_FOUND })),
         headers: {
           ...cors,
           "content-type": "application/json",
@@ -383,7 +390,7 @@ export async function handleMetadataRequest(input: TileRequest): Promise<TileMet
     };
   } catch (error) {
     if (error instanceof ResolverError) {
-      return mapMetadataResolverError(error, errorHeaders);
+      return mapMetadataResolverError(error, errorHeaders, input.method);
     }
     if (error instanceof TileApiError) {
       if (error.code === TileApiErrorCode.HEAD_DISABLED) {
@@ -396,7 +403,7 @@ export async function handleMetadataRequest(input: TileRequest): Promise<TileMet
     }
     return {
       status: 503,
-      body: JSON.stringify({ error: TileApiErrorCode.ORIGIN_READ_FAILED }),
+      body: responseBodyForMethod(input.method, JSON.stringify({ error: TileApiErrorCode.ORIGIN_READ_FAILED })),
       headers: errorHeaders,
     };
   }

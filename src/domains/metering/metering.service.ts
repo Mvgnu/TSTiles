@@ -56,6 +56,28 @@ interface WindowCounterState {
   readonly next: number;
 }
 
+function cloneDeliverySignal(signal: DeliverySignal): DeliverySignal {
+  return {
+    schemaVersion: signal.schemaVersion,
+    artifactVersion: signal.artifactVersion,
+    tilePath: signal.tilePath,
+    cacheStatus: signal.cacheStatus,
+    originRead: signal.originRead,
+    responseBytes: signal.responseBytes,
+    latencyMs: signal.latencyMs,
+    statusCode: signal.statusCode,
+    normalizedMethod: signal.normalizedMethod,
+    receivedAt: signal.receivedAt,
+  };
+}
+
+function pushBufferedDeliverySignal(signal: DeliverySignal): void {
+  if (deliverySignalBuffer.length >= maxDeliverySignalBuffer) {
+    deliverySignalBuffer.shift();
+  }
+  deliverySignalBuffer.push(signal);
+}
+
 function throwMeteringError(code: MeteringErrorCode, details: string): never {
   throw new MeteringError(code, details);
 }
@@ -383,12 +405,10 @@ export function consumeRequestUnit(identity: ProjectUsageIdentity | null, endpoi
 }
 
 export function recordDeliverySignal(signal: DeliverySignal): void {
-  setTimeout(() => {
-    if (deliverySignalBuffer.length >= maxDeliverySignalBuffer) {
-      deliverySignalBuffer.shift();
-    }
-    deliverySignalBuffer.push(signal);
-  }, 0);
+  const snapshot = cloneDeliverySignal(signal);
+  queueMicrotask(() => {
+    pushBufferedDeliverySignal(snapshot);
+  });
 }
 
 export function getUsageSummary(projectId: string, window: UsageCounterWindow): UsageSummary[] {

@@ -211,6 +211,19 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
   });
   assert.equal(denied.status, 401);
   assert.equal(denied.headers["cache-control"], "no-store");
+  assert.notEqual(denied.body, undefined);
+
+  process.env.HEAD_ENABLED = "true";
+  const deniedHead = await handleTileRequest({
+    method: "HEAD",
+    path: "/tiles/2/2/3.mvt",
+    headers: {
+      origin: "https://example.com",
+    },
+  });
+  assert.equal(deniedHead.status, 401);
+  assert.equal(deniedHead.headers["cache-control"], "no-store");
+  assert.equal(deniedHead.body, undefined);
 
   const originDenied = await handleTileRequest({
     method: "GET",

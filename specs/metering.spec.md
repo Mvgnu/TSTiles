@@ -22,6 +22,7 @@ exports:
 consumes:
   - contracts.DeliverySignal
   - projects.ProjectPolicy
+  - projects.getProjectPolicy
 verification:
   typecheck: "npx tsc --noEmit"
   test: "vitest run src/domains/metering/__tests__/ --globals --passWithNoTests"
@@ -55,10 +56,9 @@ Owns usage accounting and quota gating before cache/origin reads.
 
 ## Error Taxonomy
 
-- `METERING_QUOTA_EXCEEDED`
-- `METERING_RATE_LIMITED`
-- `METERING_STORE_UNAVAILABLE`
 - `METERING_BAD_IDENTITY`
+
+Quota/rate-limit outcomes are returned in `QuotaDecision.denyReason` (`quota` or `rate_limit`) rather than thrown as typed errors.
 
 ## Pricing Meter
 

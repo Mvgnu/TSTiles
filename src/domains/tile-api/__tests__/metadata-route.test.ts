@@ -156,6 +156,18 @@ test("metadata endpoint validates path, cache headers, and auth", async (): Prom
   });
   assert.equal(denied.status, 401);
   assert.equal(denied.headers["cache-control"], "no-store");
+  assert.notEqual(denied.body, undefined);
+
+  const deniedHead = await handleMetadataRequest({
+    method: "HEAD",
+    path: "/tiles/metadata",
+    headers: {
+      origin: "https://example.com",
+    },
+  });
+  assert.equal(deniedHead.status, 401);
+  assert.equal(deniedHead.headers["cache-control"], "no-store");
+  assert.equal(deniedHead.body, undefined);
 
   const wrongResource = await handleMetadataRequest({
     method: "GET",
@@ -171,6 +183,18 @@ test("metadata endpoint validates path, cache headers, and auth", async (): Prom
     const payload = JSON.parse(wrongResource.body) as { error?: string };
     assert.equal(payload.error, "TILE_NOT_FOUND");
   }
+
+  const wrongResourceHead = await handleMetadataRequest({
+    method: "HEAD",
+    path: "/tiles/2/2/3.mvt",
+    headers: {
+      origin: "https://example.com",
+      authorization: "tile-token",
+    },
+  });
+  assert.equal(wrongResourceHead.status, 404);
+  assert.equal(wrongResourceHead.headers["cache-control"], "no-store");
+  assert.equal(wrongResourceHead.body, undefined);
 
   const badPath = await handleMetadataRequest({
     method: "GET",
