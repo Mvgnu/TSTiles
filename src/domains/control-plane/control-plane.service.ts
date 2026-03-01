@@ -323,14 +323,6 @@ export async function triggerIngest(actorToken?: string): Promise<JobMetadata> {
   addJob({
     ...job,
     snapshotId: snapshot.snapshotId,
-    outcome: "ok",
-  });
-  addAudit({
-    actor,
-    operation: "ingest",
-    outcome: "ok",
-    startedAt,
-    completedAt: undefined,
   });
 
   void runIngestPipeline(snapshot)
