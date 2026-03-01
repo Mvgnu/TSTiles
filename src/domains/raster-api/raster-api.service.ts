@@ -334,7 +334,7 @@ async function handleRasterRequest(
   const path = normalizePath(input.path);
   const requestHeaders = normalizeHeaderMap(input.headers);
   const origin = normalizeOrigin(requestHeaders);
-  const errorHeaders = {
+  let errorHeaders = {
     ...buildPreflightHeaders(origin),
     "content-type": "application/json",
     "cache-control": "no-store",
@@ -371,6 +371,11 @@ async function handleRasterRequest(
     assertHeadEnabled(input.method, config.tileDeliveryPolicy.headEnabled);
     const auth = authorizeTileRequest(asAuthorizeContext(input));
     const cors = buildCorsHeaders(auth, origin);
+    errorHeaders = {
+      ...cors,
+      "content-type": "application/json",
+      "cache-control": "no-store",
+    };
     if (!auth.allow) {
       return {
         status: mapDenyStatus(auth.denyReason),

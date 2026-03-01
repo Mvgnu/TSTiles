@@ -9,10 +9,12 @@ export const enum MeteringErrorCode {
 
 export class MeteringError extends Error {
   public readonly code: MeteringErrorCode;
+  public readonly details: string;
 
   public constructor(code: MeteringErrorCode, details: string) {
     super(`${code}:${details}`);
     this.code = code;
+    this.details = details;
     this.name = "MeteringError";
   }
 }

@@ -62,7 +62,7 @@ Owns protected operational actions and diagnostics for administrators.
 - `promoteArtifactEndpoint(versionId: string): ActiveArtifactPointer`
 - `rollbackArtifactEndpoint(): ActiveArtifactPointer`
 - `createProjectEndpoint(input): Project`
-- `rotateApiKeyEndpoint(projectId: string): ApiKeyRecord`
+- `rotateApiKeyEndpoint(projectId: string): IssuedApiKey`
 - `getProjectUsageEndpoint(projectId: string, window): UsageSummary`
 - `createStyleVersionEndpoint(styleId: string, input): StyleVersion`
 - `publishStyleVersionEndpoint(styleId: string, versionId: string): StyleVersion`
@@ -85,7 +85,7 @@ Owns protected operational actions and diagnostics for administrators.
 - All control-plane endpoints require admin authentication.
 - Mutating operations are auditable and idempotent where feasible.
 - Health endpoints never expose sensitive configuration details.
-- Admin-only project key operations never return raw key material after initial issuance.
+- Admin-only project key operations return raw key material only at issuance/rotation time.
 - In-memory job/audit telemetry uses bounded retention to avoid unbounded process memory growth.
 
 ## Error Taxonomy

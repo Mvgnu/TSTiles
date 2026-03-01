@@ -9,10 +9,12 @@ export const enum IngestErrorCode {
 
 export class IngestError extends Error {
   public readonly code: IngestErrorCode;
+  public readonly details: string;
 
-  public constructor(code: IngestErrorCode, message: string) {
-    super(message);
+  public constructor(code: IngestErrorCode, details: string) {
+    super(details);
     this.code = code;
+    this.details = details;
     this.name = "IngestError";
   }
 }

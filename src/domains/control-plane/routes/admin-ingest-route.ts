@@ -16,7 +16,7 @@ export async function adminIngestRoute(token: string): Promise<AdminRouteRespons
     return adminJsonResponse(202, job);
   } catch (error) {
     return adminErrorResponse(error, {
-      defaultStatus: 400,
+      defaultStatus: 503,
       defaultMessage: "Ingest failed",
     });
   }

@@ -83,6 +83,7 @@ Owns `/v1/tiles/{z}/{x}/{y}.mvt` request handling (with optional `/v1` prefix no
 
 - Never forwards raw auth tokens to object-store requests.
 - Denied requests are short-circuited before cache read and origin read.
+- Post-auth resolver failures preserve the resolved request CORS policy (including project-scoped origins) while returning `cache-control: no-store`.
 
 ## Data Stores
 

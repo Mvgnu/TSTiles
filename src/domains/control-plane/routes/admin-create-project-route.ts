@@ -16,7 +16,7 @@ export async function adminCreateProjectRoute(token: string, input: unknown): Pr
     return adminJsonResponse(201, body);
   } catch (error) {
     return adminErrorResponse(error, {
-      defaultStatus: 400,
+      defaultStatus: 503,
       defaultMessage: "Project creation failed",
     });
   }

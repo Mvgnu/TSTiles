@@ -6,6 +6,8 @@ export interface RenderInput {
   readonly artifactId: string;
   readonly sourcePath: string;
   readonly format: RenderFormat;
+  readonly width?: number;
+  readonly height?: number;
 }
 
 export interface RenderAdapterOutput {
@@ -22,6 +24,7 @@ function renderLocalFallback(input: RenderInput): RenderAdapterOutput {
   const marker = [
     "remote-renderer",
     input.format,
+    `size=${input.width ?? 256}x${input.height ?? 256}`,
     input.styleId,
     input.styleVersionKey,
     input.artifactId,

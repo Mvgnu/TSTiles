@@ -10,10 +10,12 @@ export const enum ResolverErrorCode {
 
 export class ResolverError extends Error {
   public readonly code: ResolverErrorCode;
+  public readonly details?: string;
 
   public constructor(code: ResolverErrorCode, details?: string) {
     super(details ? `${code}:${details}` : code);
     this.code = code;
+    this.details = details;
     this.name = "ResolverError";
   }
 }

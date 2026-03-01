@@ -15,7 +15,7 @@ export async function adminListArtifactsRoute(token: string): Promise<AdminRoute
     return adminJsonResponse(200, listArtifactsEndpoint(token));
   } catch (error) {
     return adminErrorResponse(error, {
-      defaultStatus: 400,
+      defaultStatus: 503,
       defaultMessage: "Failed to list artifacts",
     });
   }

@@ -50,6 +50,7 @@ Owns HTTP request handling for raster tiles and static images.
 - `HEAD` responses are only served when `HEAD_ENABLED=true`; if disabled, handlers return `405` with `HEAD_DISABLED`.
   `HEAD_DISABLED` responses for HEAD requests are body-less.
 - Render calls are timeout-bounded (`RENDER_TIMEOUT_MS`, default `15000`) and return `503` on timeout.
+- Post-auth render/style failures preserve the resolved request CORS policy (including project-scoped origins) while returning `cache-control: no-store`.
 
 ## Error Taxonomy
 

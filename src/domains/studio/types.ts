@@ -10,10 +10,12 @@ export const enum StudioErrorCode {
 
 export class StudioError extends Error {
   public readonly code: StudioErrorCode;
+  public readonly details: string;
 
   public constructor(code: StudioErrorCode, details: string) {
     super(`${code}:${details}`);
     this.code = code;
+    this.details = details;
     this.name = "StudioError";
   }
 }

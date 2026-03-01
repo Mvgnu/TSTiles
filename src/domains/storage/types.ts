@@ -9,11 +9,13 @@ export const enum StorageErrorCode {
 
 export class StorageError extends Error {
   public readonly code: StorageErrorCode;
+  public readonly details: string;
   public readonly key?: string;
 
-  public constructor(code: StorageErrorCode, message: string, key?: string) {
-    super(message);
+  public constructor(code: StorageErrorCode, details: string, key?: string) {
+    super(details);
     this.code = code;
+    this.details = details;
     this.key = key;
     this.name = "StorageError";
   }

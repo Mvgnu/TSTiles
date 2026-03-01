@@ -9,6 +9,7 @@ paths:
 exports:
   - Project
   - ApiKeyRecord
+  - IssuedApiKey
   - ProjectIdentity
   - ProjectCreationInput
   - ProjectPolicy
@@ -46,7 +47,7 @@ Owns everything that turns a provided API token into a sanitized project identit
 - `resolveProjectIdentity(ctx): { projectId: string; keyId: string; keyHash: string; keyIdHash: string; planId: string } | null`
 - `listProjects(): Project[]`
 - `createProject(input): Project`
-- `rotateApiKey(projectId: string): ApiKeyRecord`
+- `rotateApiKey(projectId: string): IssuedApiKey`
 - `revokeApiKey(projectId: string, keyId: string): ApiKeyRecord`
 - `deleteProject(projectId: string): void`
 - `getProjectPolicy(projectId: string): ProjectPolicy`
@@ -60,7 +61,8 @@ Owns everything that turns a provided API token into a sanitized project identit
 
 ## Owned Invariants
 
-- Never returns raw token values; only key identifiers and hashed key identities.
+- Verification and listing surfaces never return raw token values; only key identifiers and hashed identities.
+- Rotation returns a one-time raw token (`IssuedApiKey.token`) alongside hashed identity fields.
 - Key rotation revokes previously active keys for the project before issuing a new one.
 - Store adapters are deterministic, unit-testable, and side-effect minimal.
 

@@ -21,10 +21,12 @@ export const enum ControlPlaneErrorCode {
 
 export class ControlPlaneError extends Error {
   public readonly code: ControlPlaneErrorCode;
+  public readonly details: string;
 
-  public constructor(code: ControlPlaneErrorCode, message: string) {
-    super(message);
+  public constructor(code: ControlPlaneErrorCode, details: string) {
+    super(details);
     this.code = code;
+    this.details = details;
     this.name = "ControlPlaneError";
   }
 }

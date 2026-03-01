@@ -135,6 +135,7 @@ test("admin routes enforce auth and state transitions", async (): Promise<void> 
   assert.equal(rotate.status, 200);
   assert.equal(rotate.headers["cache-control"], "no-store");
   assert.equal(typeof (rotate.body as { keyId?: string }).keyId, "string");
+  assert.equal(typeof (rotate.body as { token?: string }).token, "string");
   const rotateTrimmed = await adminRotateApiKeyRoute(` ${(projectCreate.body as { id?: string }).id ?? "missing"} `, token);
   assert.equal(rotateTrimmed.status, 200);
   const rotateBlank = await adminRotateApiKeyRoute(" ", token);

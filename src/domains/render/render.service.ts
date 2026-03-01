@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import type { StyleDocument } from "../styles/types";
+import { StyleError, StyleErrorCode, type StyleDocument } from "../styles/types";
 import { getStyle } from "../styles/styles.service";
 import { resolveVectorTile } from "../tile-resolver/tile-resolver.service";
+import { ResolverError, ResolverErrorCode } from "../tile-resolver/types";
 import {
   RenderError,
   RenderErrorCode,
@@ -180,12 +181,13 @@ async function resolveStyle(styleId: string, versionId?: string): Promise<Resolv
     if (isRenderError(error)) {
       throw error;
     }
-    const code = messageCode(error);
-    if (code === "STYLE_NOT_FOUND" || code === "STYLE_VERSION_NOT_FOUND") {
-      throwRenderError(RenderErrorCode.STYLE_NOT_FOUND);
-    }
-    if (code === "STYLE_INVALID_DOCUMENT") {
-      throwRenderError(RenderErrorCode.BAD_REQUEST);
+    if (error instanceof StyleError) {
+      if (error.code === StyleErrorCode.NOT_FOUND || error.code === StyleErrorCode.VERSION_NOT_FOUND) {
+        throwRenderError(RenderErrorCode.STYLE_NOT_FOUND);
+      }
+      if (error.code === StyleErrorCode.BAD_REQUEST || error.code === StyleErrorCode.INVALID_DOCUMENT) {
+        throwRenderError(RenderErrorCode.BAD_REQUEST);
+      }
     }
     throwRenderError(RenderErrorCode.BACKEND_UNAVAILABLE, "style");
   }
@@ -259,16 +261,17 @@ async function renderFromSource(input: TileRequestInput): Promise<RenderedImage>
       y: input.sourceY,
     });
   } catch (error) {
-    const code = messageCode(error);
-    if (code === "RESOLVER_BAD_COORDINATES") {
-      throwRenderError(RenderErrorCode.BAD_REQUEST, "coordinates");
-    }
-    if (
-      code === "RESOLVER_TILE_NOT_FOUND"
-      || code === "RESOLVER_ARTIFACT_UNAVAILABLE"
-      || code === "RESOLVER_ORIGIN_READ_FAILED"
-    ) {
-      throwRenderError(RenderErrorCode.TILE_RESOLVE_FAILED);
+    if (error instanceof ResolverError) {
+      if (error.code === ResolverErrorCode.BAD_COORDINATES) {
+        throwRenderError(RenderErrorCode.BAD_REQUEST, "coordinates");
+      }
+      if (
+        error.code === ResolverErrorCode.TILE_NOT_FOUND
+        || error.code === ResolverErrorCode.ARTIFACT_UNAVAILABLE
+        || error.code === ResolverErrorCode.ORIGIN_READ_FAILED
+      ) {
+        throwRenderError(RenderErrorCode.TILE_RESOLVE_FAILED);
+      }
     }
     throwRenderError(RenderErrorCode.BACKEND_UNAVAILABLE, "resolver");
   }
@@ -339,7 +342,7 @@ export async function renderStaticMap(input: StaticMapRequest): Promise<Rendered
     styleId: normalizedStyleId,
     styleVersionId: normalizedVersionId ?? metadata.styleVersionId,
     format: input.format,
-    sourcePath: `static/${input.lon},${input.lat},${input.zoom}`,
+    sourcePath: `/static/${input.lon},${input.lat},${input.zoom}/${metadata.width}x${metadata.height}`,
     sourceZ: metadata.sourceZ,
     sourceX: metadata.sourceX,
     sourceY: metadata.sourceY,

@@ -129,6 +129,61 @@ test("render static map cache key is stable for overlay set order", async (): Pr
   assert.equal(first.cacheKey, second.cacheKey);
 });
 
+test("render static map cache key varies by output dimensions", async (): Promise<void> => {
+  await prepareActiveArtifact();
+  const styleId = `style-${randomUUID().slice(0, 8)}`;
+  publishStyle(styleId);
+
+  const small = await renderStaticMap({
+    styleId,
+    lon: -122.4,
+    lat: 37.77,
+    zoom: 12,
+    width: 320,
+    height: 240,
+    format: "png",
+  });
+  const large = await renderStaticMap({
+    styleId,
+    lon: -122.4,
+    lat: 37.77,
+    zoom: 12,
+    width: 640,
+    height: 480,
+    format: "png",
+  });
+
+  assert.equal(small.cacheKey === large.cacheKey, false);
+});
+
+test("render static map forwards dimensions to remote renderer backend", async (): Promise<void> => {
+  await prepareActiveArtifact();
+  const styleId = `style-${randomUUID().slice(0, 8)}`;
+  publishStyle(styleId);
+  const previousBackend = process.env.RENDER_BACKEND;
+  process.env.RENDER_BACKEND = "remote";
+  try {
+    const image = await renderStaticMap({
+      styleId,
+      lon: -122.4,
+      lat: 37.77,
+      zoom: 12,
+      width: 640,
+      height: 360,
+      format: "png",
+    });
+    const text = new TextDecoder().decode(image.bytes);
+    assert.equal(text.includes("remote-renderer"), true);
+    assert.equal(text.includes("size=640x360"), true);
+  } finally {
+    if (previousBackend === undefined) {
+      delete process.env.RENDER_BACKEND;
+    } else {
+      process.env.RENDER_BACKEND = previousBackend;
+    }
+  }
+});
+
 test("renderStaticMap rejects invalid dimensions", async () => {
   const styleId = `style-${randomUUID().slice(0, 8)}`;
   publishStyle(styleId);

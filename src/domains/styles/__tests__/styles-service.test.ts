@@ -30,6 +30,11 @@ test("style lifecycle and validation contract", (): void => {
   };
 
   const draftVersion = createStyleVersion("demo", draft);
+  // Mutating caller-owned input after create must not mutate stored version state.
+  draft.layers?.push({
+    id: "mutated-after-create",
+    type: "fill",
+  });
   const publishResult = publishStyleVersion("demo", draftVersion.id);
   assert.equal(publishResult.id, draftVersion.id);
   assert.throws(() => {
@@ -42,8 +47,20 @@ test("style lifecycle and validation contract", (): void => {
   assert.equal(trimmedPublish.styleId, "demo-trim");
 
   const published = getStyle("demo");
+  (published.layers as unknown[] | undefined)?.push({
+    id: "mutated-return-value",
+    type: "line",
+  });
+  const fetchedAgain = getStyle("demo");
   assert.equal(published.version, 8);
   assert.equal(typeof published.sources, "object");
+  assert.equal(Array.isArray(fetchedAgain.layers), true);
+  assert.equal((fetchedAgain.layers as unknown[]).some((entry) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      return false;
+    }
+    return (entry as { id?: unknown }).id === "mutated-return-value";
+  }), false);
 
   const styles = listStyles();
   assert.equal(styles.some((entry) => entry.id === "demo"), true);

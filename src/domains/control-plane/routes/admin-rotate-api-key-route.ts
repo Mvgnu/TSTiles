@@ -20,7 +20,7 @@ export async function adminRotateApiKeyRoute(projectId: string, token: string): 
     return adminJsonResponse(200, body);
   } catch (error) {
     return adminErrorResponse(error, {
-      defaultStatus: 400,
+      defaultStatus: 503,
       defaultMessage: "API key rotation failed",
     });
   }

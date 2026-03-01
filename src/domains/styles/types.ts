@@ -11,10 +11,12 @@ export const enum StyleErrorCode {
 
 export class StyleError extends Error {
   public readonly code: StyleErrorCode;
+  public readonly details: string;
 
   public constructor(code: StyleErrorCode, details: string) {
     super(`${code}:${details}`);
     this.code = code;
+    this.details = details;
     this.name = "StyleError";
   }
 }

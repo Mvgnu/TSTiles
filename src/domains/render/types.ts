@@ -9,10 +9,12 @@ export const enum RenderErrorCode {
 
 export class RenderError extends Error {
   public readonly code: RenderErrorCode;
+  public readonly details?: string;
 
   public constructor(code: RenderErrorCode, details?: string) {
     super(details ? `${code}:${details}` : code);
     this.code = code;
+    this.details = details;
     this.name = "RenderError";
   }
 }

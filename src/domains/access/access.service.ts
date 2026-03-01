@@ -19,8 +19,21 @@ export function authorizeTileRequest(input: AuthorizeContext): AuthorizeResult {
   const tokenCandidate = (input.rawToken ?? headers["x-api-token"]) ?? authHeader;
   const projectIdentity = resolveProjectIdentity({ rawToken: tokenCandidate });
   const resolvedIdentity = projectIdentity ? `${projectIdentity.projectId}:${projectIdentity.keyIdHash}` : "anon";
-  const projectPolicy = projectIdentity ? getProjectPolicy(projectIdentity.projectId) : undefined;
-  const allowedOrigins = projectPolicy?.allowedOrigins ?? config.security.allowedOrigins;
+  let projectPolicy: ProjectPolicy | undefined;
+  let allowedOrigins: readonly string[] = config.security.allowedOrigins;
+  if (projectIdentity) {
+    try {
+      projectPolicy = getProjectPolicy(projectIdentity.projectId);
+      allowedOrigins = projectPolicy.allowedOrigins ?? config.security.allowedOrigins;
+    } catch {
+      return {
+        allow: false,
+        denyReason: "ACCESS_UNAUTHORIZED",
+        sanitizedIdentity: resolvedIdentity,
+        allowedOrigins: config.security.allowedOrigins,
+      };
+    }
+  }
 
   function deny(reason: DenyReason): AuthorizeResult {
     return {

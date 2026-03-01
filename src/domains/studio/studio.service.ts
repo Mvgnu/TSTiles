@@ -17,20 +17,12 @@ function assertNonEmpty(value: string, field: string): string {
   return normalized;
 }
 
-function errorDetails(message: string): string {
-  const separator = message.indexOf(":");
-  if (separator < 0 || separator === message.length - 1) {
-    return message;
-  }
-  return message.slice(separator + 1).trim();
-}
-
 function mapStyleError(error: unknown): never {
   if (error instanceof StudioError) {
     throw error;
   }
   if (error instanceof StyleError) {
-    const details = errorDetails(error.message);
+    const details = error.details;
     if (error.code === StyleErrorCode.NOT_FOUND || error.code === StyleErrorCode.VERSION_NOT_FOUND) {
       throw new StudioError(StudioErrorCode.NOT_FOUND, details);
     }
@@ -50,10 +42,13 @@ function mapStyleError(error: unknown): never {
 
 function buildDraftStyle(styleId: string): StyleAdminDraft | undefined {
   try {
-    const document = getStyle(styleId);
     const records = listStyles();
     const record = records.find((item) => item.id === styleId);
-    const versionId = record?.latestVersionId ?? "draft";
+    const versionId = record?.latestVersionId;
+    if (!versionId) {
+      return undefined;
+    }
+    const document = getStyle(styleId, versionId);
     return {
       styleId,
       versionId,
@@ -61,7 +56,10 @@ function buildDraftStyle(styleId: string): StyleAdminDraft | undefined {
       previewUrl: `/v1/styles/${styleId}/style.json`,
     };
   } catch (error) {
-    if (error instanceof StyleError && error.code === StyleErrorCode.NOT_FOUND) {
+    if (
+      error instanceof StyleError
+      && (error.code === StyleErrorCode.NOT_FOUND || error.code === StyleErrorCode.VERSION_NOT_FOUND)
+    ) {
       return undefined;
     }
     mapStyleError(error);

@@ -4,6 +4,7 @@ import {
   ProjectsError,
   ProjectsErrorCode,
   type ApiKeyRecord,
+  type IssuedApiKey,
   type Project,
   type ProjectCreationInput,
   type ProjectIdentity,
@@ -26,6 +27,50 @@ const defaultPolicy: ProjectPolicy = {
 const projects = new Map<string, Project>();
 const apiKeys = new Map<string, ApiKeyRecord>();
 let initialized = false;
+
+function clonePolicy(policy: ProjectPolicy): ProjectPolicy {
+  return {
+    allowedOrigins: policy.allowedOrigins ? [...policy.allowedOrigins] : undefined,
+    allowedEndpoints: {
+      tiles: policy.allowedEndpoints.tiles,
+      raster: policy.allowedEndpoints.raster,
+      staticMaps: policy.allowedEndpoints.staticMaps,
+    },
+    quotas: policy.quotas
+      ? {
+        dailyRequests: policy.quotas.dailyRequests,
+        monthlyRequests: policy.quotas.monthlyRequests,
+        minuteRequests: policy.quotas.minuteRequests,
+      }
+      : undefined,
+    cache: policy.cache
+      ? {
+        tileTtlSeconds: policy.cache.tileTtlSeconds,
+        metadataTtlSeconds: policy.cache.metadataTtlSeconds,
+      }
+      : undefined,
+  };
+}
+
+function cloneProject(project: Project): Project {
+  return {
+    ...project,
+    policy: clonePolicy(project.policy),
+  };
+}
+
+function cloneApiKey(record: ApiKeyRecord): ApiKeyRecord {
+  return {
+    ...record,
+  };
+}
+
+function cloneIssuedApiKey(key: IssuedApiKey): IssuedApiKey {
+  return {
+    ...cloneApiKey(key),
+    token: key.token,
+  };
+}
 
 function buildProjectsPolicyError(message: string): ProjectsError {
   return new ProjectsError(ProjectsErrorCode.POLICY_INVALID, message);
@@ -250,7 +295,7 @@ function registerApiKey(projectId: string, rawToken: string): ApiKeyRecord {
     revoked: false,
   };
   apiKeys.set(keyHash, record);
-  return record;
+  return cloneApiKey(record);
 }
 
 export function verifyApiKey(rawToken: string): ApiKeyRecord | null {
@@ -264,7 +309,7 @@ export function verifyApiKey(rawToken: string): ApiKeyRecord | null {
   if (!record || record.revoked) {
     return null;
   }
-  return record;
+  return cloneApiKey(record);
 }
 
 export function resolveProjectIdentity(input: { rawToken?: string } | string): ProjectIdentity | null {
@@ -288,7 +333,7 @@ export function resolveProjectIdentity(input: { rawToken?: string } | string): P
 
 export function listProjects(): Project[] {
   bootstrapLegacyProjects();
-  return [...projects.values()];
+  return [...projects.values()].map((project) => cloneProject(project));
 }
 
 export function getProjectPolicy(projectId: string): Project["policy"] {
@@ -298,7 +343,7 @@ export function getProjectPolicy(projectId: string): Project["policy"] {
   if (!project) {
     throw new ProjectsError(ProjectsErrorCode.PROJECT_NOT_FOUND, "project not found");
   }
-  return project.policy;
+  return clonePolicy(project.policy);
 }
 
 export function createProject(input: ProjectCreationInput): Project {
@@ -317,10 +362,10 @@ function createProjectRecord(input: ProjectCreationInput): Project {
     createdAt: new Date().toISOString(),
   };
   projects.set(project.id, project);
-  return project;
+  return cloneProject(project);
 }
 
-export function rotateApiKey(projectId: string): ApiKeyRecord {
+export function rotateApiKey(projectId: string): IssuedApiKey {
   bootstrapLegacyProjects();
   const normalizedProjectId = normalizeProjectId(projectId);
   const project = projects.get(normalizedProjectId);
@@ -336,7 +381,11 @@ export function rotateApiKey(projectId: string): ApiKeyRecord {
     }
   }
   const rawKey = randomBytes(24).toString("base64url");
-  return registerApiKey(project.id, rawKey);
+  const issued: IssuedApiKey = {
+    ...registerApiKey(project.id, rawKey),
+    token: rawKey,
+  };
+  return cloneIssuedApiKey(issued);
 }
 
 export function revokeApiKey(projectId: string, keyId: string): ApiKeyRecord {
@@ -351,14 +400,14 @@ export function revokeApiKey(projectId: string, keyId: string): ApiKeyRecord {
       continue;
     }
     if (record.revoked) {
-      return record;
+      return cloneApiKey(record);
     }
     const revokedRecord: ApiKeyRecord = {
       ...record,
       revoked: true,
     };
     apiKeys.set(hash, revokedRecord);
-    return revokedRecord;
+    return cloneApiKey(revokedRecord);
   }
   throw new ProjectsError(ProjectsErrorCode.KEY_INVALID, "key not found");
 }

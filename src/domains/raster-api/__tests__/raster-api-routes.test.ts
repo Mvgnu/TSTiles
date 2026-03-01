@@ -5,6 +5,7 @@ import { promoteArtifact, registerArtifact } from "../../artifact/artifact.servi
 import { createObjectStore } from "../../storage/storage.service";
 import { loadConfig } from "../../../config/load-config";
 import type { RasterRequest } from "../types";
+import { createProject, rotateApiKey } from "../../projects/projects.service";
 
 type TestFunction = (name: string, fn: () => void | Promise<void>) => void;
 const test: TestFunction = ((globalThis as { test?: TestFunction }).test ?? ((_, fn) => {
@@ -140,6 +141,25 @@ test("raster and static routes resolve and enforce request semantics", async ():
     const parsed = JSON.parse(new TextDecoder().decode(rasterUnknown.body)) as { error?: string };
     assert.equal(parsed.error, "RASTER_STYLE_NOT_FOUND");
   }
+
+  const tenantProject = createProject({
+    name: "Tenant Raster Project",
+    policy: {
+      allowedOrigins: ["https://tenant.example"],
+    },
+  });
+  const tenantKey = rotateApiKey(tenantProject.id);
+  const tenantRasterUnknown = await handleRasterTileRequest({
+    method: "GET",
+    path: "/v1/raster/missing/2/2/3.png",
+    headers: {
+      origin: "https://tenant.example",
+      authorization: tenantKey.token,
+    },
+  });
+  assert.equal(tenantRasterUnknown.status, 404);
+  assert.equal(tenantRasterUnknown.headers["cache-control"], "no-store");
+  assert.equal(tenantRasterUnknown.headers["access-control-allow-origin"], "https://tenant.example");
 
   const rasterOutOfRange = await handleRasterTileRequest({
     method: "GET",

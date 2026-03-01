@@ -10,10 +10,12 @@ export const enum ArtifactErrorCode {
 
 export class ArtifactError extends Error {
   public readonly code: ArtifactErrorCode;
+  public readonly details: string;
 
-  public constructor(code: ArtifactErrorCode, message: string) {
-    super(message);
+  public constructor(code: ArtifactErrorCode, details: string) {
+    super(details);
     this.code = code;
+    this.details = details;
     this.name = "ArtifactError";
   }
 }

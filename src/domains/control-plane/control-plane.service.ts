@@ -1,4 +1,5 @@
 import { loadConfig } from "../../config/load-config";
+import { ConfigError } from "../../config/types";
 import { runIngestPipeline, buildDefaultSnapshot } from "../ingest/ingest.service";
 import {
   listArtifacts,
@@ -142,13 +143,31 @@ function normalizeErrorMessage(error: unknown): string {
   if (error instanceof Error && isRecord(error)) {
     const code = error.code;
     if (typeof code === "string") {
-      return `${code}: ${error.message}`;
+      const details = extractErrorDetails(error, code);
+      return `${code}: ${details}`;
     }
   }
   if (error instanceof Error) {
     return error.message;
   }
   return "Unknown error";
+}
+
+function extractErrorDetails(error: Error, code?: string): string {
+  if (isRecord(error)) {
+    const details = error.details;
+    if (typeof details === "string" && details.trim().length > 0) {
+      return details.trim();
+    }
+  }
+  if (
+    typeof code === "string"
+    && code.length > 0
+    && error.message.startsWith(`${code}:`)
+  ) {
+    return error.message.slice(code.length + 1).trim();
+  }
+  return error.message;
 }
 
 function buildArtifactMetadata(report: IngestRunReport): {
@@ -262,37 +281,40 @@ function toControlPlaneError(error: unknown): never {
     throw error;
   }
   if (error instanceof ProjectsError) {
+    const details = extractErrorDetails(error, error.code);
     if (error.code === ProjectsErrorCode.PROJECT_NOT_FOUND) {
-      throw new ControlPlaneError(ControlPlaneErrorCode.CONFLICT, error.message);
+      throw new ControlPlaneError(ControlPlaneErrorCode.CONFLICT, details);
     }
     if (error.code === ProjectsErrorCode.POLICY_INVALID || error.code === ProjectsErrorCode.KEY_INVALID) {
-      throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, error.message);
+      throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, details);
     }
-    throw new ControlPlaneError(ControlPlaneErrorCode.DEPENDENCY_FAILED, error.message);
+    throw new ControlPlaneError(ControlPlaneErrorCode.DEPENDENCY_FAILED, details);
   }
   if (error instanceof StyleError) {
+    const details = extractErrorDetails(error, error.code);
     if (
       error.code === StyleErrorCode.NOT_FOUND
       || error.code === StyleErrorCode.VERSION_NOT_FOUND
       || error.code === StyleErrorCode.PUBLISH_CONFLICT
     ) {
-      throw new ControlPlaneError(ControlPlaneErrorCode.CONFLICT, error.message);
+      throw new ControlPlaneError(ControlPlaneErrorCode.CONFLICT, details);
     }
     if (error.code === StyleErrorCode.BAD_REQUEST || error.code === StyleErrorCode.INVALID_DOCUMENT) {
-      throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, error.message);
+      throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, details);
     }
-    throw new ControlPlaneError(ControlPlaneErrorCode.DEPENDENCY_FAILED, error.message);
+    throw new ControlPlaneError(ControlPlaneErrorCode.DEPENDENCY_FAILED, details);
   }
   if (error instanceof ArtifactError) {
+    const details = extractErrorDetails(error, error.code);
     if (error.code === ArtifactErrorCode.NOT_FOUND || error.code === ArtifactErrorCode.PROMOTION_CONFLICT || error.code === ArtifactErrorCode.ROLLBACK_UNAVAILABLE) {
-      throw new ControlPlaneError(ControlPlaneErrorCode.CONFLICT, error.message);
+      throw new ControlPlaneError(ControlPlaneErrorCode.CONFLICT, details);
     }
     if (error.code === ArtifactErrorCode.NOT_VALIDATED) {
-      throw new ControlPlaneError(ControlPlaneErrorCode.FORBIDDEN, error.message);
+      throw new ControlPlaneError(ControlPlaneErrorCode.FORBIDDEN, details);
     }
-    throw new ControlPlaneError(ControlPlaneErrorCode.DEPENDENCY_FAILED, error.message);
+    throw new ControlPlaneError(ControlPlaneErrorCode.DEPENDENCY_FAILED, details);
   }
-  if (error instanceof Error && error.name === "ConfigError") {
+  if (error instanceof ConfigError) {
     throw new ControlPlaneError(ControlPlaneErrorCode.DEPENDENCY_FAILED, error.message);
   }
   throw new ControlPlaneError(ControlPlaneErrorCode.DEPENDENCY_FAILED, "Control plane operation failed");

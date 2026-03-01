@@ -14,10 +14,12 @@ export const enum TileApiErrorCode {
 
 export class TileApiError extends Error {
   public readonly code: TileApiErrorCode;
+  public readonly details?: string;
 
-  public constructor(code: TileApiErrorCode) {
-    super(code);
+  public constructor(code: TileApiErrorCode, details?: string) {
+    super(details ? `${code}:${details}` : code);
     this.code = code;
+    this.details = details;
     this.name = "TileApiError";
   }
 }

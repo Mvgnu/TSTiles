@@ -6,10 +6,12 @@ export const enum ObservabilityErrorCode {
 
 export class ObservabilityError extends Error {
   public readonly code: ObservabilityErrorCode;
+  public readonly details: string;
 
-  public constructor(code: ObservabilityErrorCode, message: string) {
-    super(message);
+  public constructor(code: ObservabilityErrorCode, details: string) {
+    super(details);
     this.code = code;
+    this.details = details;
     this.name = "ObservabilityError";
   }
 }

@@ -74,6 +74,13 @@ test("studio flow creates draft, publishes, and exposes draft state", (): void =
     },
     sprites: "/v1/styles/{styleId}/sprite",
     glyphs: "/v1/fonts/{fontstack}/{range}.pbf",
+    layers: [
+      {
+        id: "draft-layer",
+        type: "line",
+        source: "osm",
+      },
+    ],
   }, token);
 
   assert.equal(draft.styleId, "studio-style");
@@ -83,6 +90,8 @@ test("studio flow creates draft, publishes, and exposes draft state", (): void =
   const fetchedDraft = getStyleDraft("studio-style", token);
   assert.equal(fetchedDraft.versionId, draft.versionId);
   assert.equal(fetchedDraft.previewUrl.includes("/v1/styles/studio-style/style.json"), true);
+  assert.equal(JSON.stringify(fetchedDraft.document), JSON.stringify(draft.document));
+  assert.equal(JSON.stringify(fetchedDraft.document) === JSON.stringify(published.document), false);
 });
 
 test("studio rejects invalid style docs on draft save", (): void => {

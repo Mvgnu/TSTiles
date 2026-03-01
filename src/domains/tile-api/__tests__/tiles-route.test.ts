@@ -5,6 +5,7 @@ import type { TileRequest } from "../types";
 import { createObjectStore, setCreateObjectStore } from "../../storage/storage.service";
 import { StorageError, StorageErrorCode, type ObjectStore } from "../../storage/types";
 import { loadConfig } from "../../../config/load-config";
+import { createProject, rotateApiKey } from "../../projects/projects.service";
 
 type TestFunction = (name: string, fn: () => void | Promise<void>) => void;
 const test: TestFunction = ((globalThis as { test?: TestFunction }).test ?? ((_, fn) => {
@@ -268,6 +269,34 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
   assert.equal(missingArtifact.status, 404);
   assert.equal(missingArtifact.headers["access-control-allow-origin"], "https://example.com");
   assert.equal(missingArtifact.headers["cache-control"], "no-store");
+
+  const tenantProject = createProject({
+    name: "Tenant Tile Project",
+    policy: {
+      allowedOrigins: ["https://tenant.example"],
+    },
+  });
+  const tenantKey = rotateApiKey(tenantProject.id);
+  registerArtifact({
+    id: "tenant-missing-artifact-key",
+    key: "artifacts/tenant-missing-artifact-key/tiles.pmtiles",
+    checksum: "tenant-missing-checksum",
+    byteSize: 1000,
+    createdAt: new Date().toISOString(),
+    validated: true,
+  });
+  promoteArtifact("tenant-missing-artifact-key");
+  const tenantScopedFailure = await handleTileRequest({
+    method: "GET",
+    path: "/tiles/2/2/3.mvt",
+    headers: {
+      origin: "https://tenant.example",
+      authorization: tenantKey.token,
+    },
+  });
+  assert.equal(tenantScopedFailure.status, 404);
+  assert.equal(tenantScopedFailure.headers["cache-control"], "no-store");
+  assert.equal(tenantScopedFailure.headers["access-control-allow-origin"], "https://tenant.example");
 
   setCreateObjectStore((): ObjectStore => ({
     head: async () => ({

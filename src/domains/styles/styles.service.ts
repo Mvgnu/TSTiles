@@ -151,6 +151,28 @@ function normalizeStyleInput(input: unknown): StyleInput {
   return input;
 }
 
+function cloneStyleDocument(document: StyleDocument): StyleDocument {
+  try {
+    const serialized = JSON.stringify(document);
+    const parsed = JSON.parse(serialized) as unknown;
+    const normalized = normalizeStyleInput(parsed);
+    assertValidStyleDocument(normalized);
+    return normalized;
+  } catch (error) {
+    if (error instanceof StyleError) {
+      throw error;
+    }
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, "Style document must be serializable JSON");
+  }
+}
+
+function cloneStyleVersion(version: StyleVersion): StyleVersion {
+  return {
+    ...version,
+    document: cloneStyleDocument(version.document),
+  };
+}
+
 function normalizeRequiredIdentifier(value: string, field: string): string {
   const normalized = value.trim();
   if (normalized.length === 0) {
@@ -262,13 +284,14 @@ export function getStyle(styleId: string, versionId?: string): StyleDocument {
     throw buildError(StyleErrorCode.VERSION_NOT_FOUND, "No published style version");
   }
   const version = ensureVersionExists(record, targetVersion);
-  return version.document;
+  return cloneStyleDocument(version.document);
 }
 
 export function createStyleVersion(styleId: string, input: unknown): StyleVersion {
   const normalizedStyleId = normalizeRequiredIdentifier(styleId, "styleId");
   const document = normalizeStyleInput(input);
   assertValidStyleDocument(document);
+  const storedDocument = cloneStyleDocument(document);
   const existing = styles.get(normalizedStyleId);
   const createdAt = new Date().toISOString();
   const versionId = `${normalizedStyleId}-${randomUUID().slice(0, 8)}`;
@@ -276,7 +299,7 @@ export function createStyleVersion(styleId: string, input: unknown): StyleVersio
     id: versionId,
     styleId: normalizedStyleId,
     createdAt,
-    document,
+    document: storedDocument,
   };
   if (!existing) {
     styles.set(normalizedStyleId, {
@@ -286,11 +309,11 @@ export function createStyleVersion(styleId: string, input: unknown): StyleVersio
       publishedVersionId: null,
       createdAt,
     });
-    return version;
+    return cloneStyleVersion(version);
   }
   existing.versions.set(versionId, version);
   existing.latestVersionId = versionId;
-  return version;
+  return cloneStyleVersion(version);
 }
 
 export function publishStyleVersion(styleId: string, versionId: string): StyleVersion {
@@ -304,7 +327,7 @@ export function publishStyleVersion(styleId: string, versionId: string): StyleVe
     throw buildError(StyleErrorCode.PUBLISH_CONFLICT, "Style version already published");
   }
   record.publishedVersionId = version.id;
-  return version;
+  return cloneStyleVersion(version);
 }
 
 export function resolveStyleAssets(styleId: string, versionId?: string): StyleAssets {

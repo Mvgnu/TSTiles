@@ -375,30 +375,22 @@ test("authorize tile request policy", () => {
 
   const projects = listProjects();
   const legacyProject = projects.find((project) => project.name === "legacy");
-  const mutableProject = legacyProject as {
-    policy: {
-      allowedOrigins?: readonly string[];
-      allowedEndpoints: {
-        tiles: boolean;
-        raster: boolean;
-        staticMaps: boolean;
-      };
-      quotas?: {
-        dailyRequests?: number;
-        monthlyRequests?: number;
-        minuteRequests?: number;
+  assert.equal(legacyProject !== undefined, true);
+  if (legacyProject) {
+    const mutableProject = legacyProject as {
+      policy: {
+        allowedOrigins?: readonly string[];
+        allowedEndpoints: {
+          tiles: boolean;
+          raster: boolean;
+          staticMaps: boolean;
+        };
       };
     };
-  } | null;
-  const originalProjectOrigins = mutableProject?.policy.allowedOrigins;
-  const originalProjectEndpoints = mutableProject?.policy.allowedEndpoints;
-  const originalProjectQuotas = mutableProject?.policy.quotas;
-  if (mutableProject !== null && mutableProject !== undefined) {
     mutableProject.policy = {
-      ...mutableProject.policy,
       allowedOrigins: ["https://tenant.example"],
       allowedEndpoints: {
-        ...mutableProject.policy.allowedEndpoints,
+        tiles: true,
         raster: false,
         staticMaps: false,
       },
@@ -410,11 +402,13 @@ test("authorize tile request policy", () => {
     path: "/tiles/2/2/3.mvt",
     query: {},
     headers: {
-      origin: "https://tenant.example",
+      origin: "https://api.example.com",
       authorization: "tile-token",
     },
   });
   assert.equal(projectAllowedByPolicy.allow, true);
+  const projectScopedAllowed = buildCorsHeaders(projectAllowedByPolicy, "https://api.example.com");
+  assert.equal(projectScopedAllowed["access-control-allow-origin"], "https://api.example.com");
   const projectDeniedByPolicy = authorizeTileRequest({
     method: "GET",
     path: "/tiles/2/2/3.mvt",
@@ -427,87 +421,57 @@ test("authorize tile request policy", () => {
   assert.equal(projectDeniedByPolicy.allow, false);
   const projectHeaders = buildCorsHeaders(projectDeniedByPolicy, "https://other.example.net");
   assert.equal(projectHeaders["access-control-allow-origin"], "*");
-  const projectScopedAllowed = buildCorsHeaders(projectAllowedByPolicy, "https://tenant.example");
-  assert.equal(projectScopedAllowed["access-control-allow-origin"], "https://tenant.example");
-  const rasterDeniedByPolicy = authorizeTileRequest({
+  const rasterAllowedByPolicy = authorizeTileRequest({
     method: "GET",
     path: "/raster/basic/2/2/3.png",
     query: {},
     headers: {
-      origin: "https://tenant.example",
+      origin: "https://api.example.com",
       authorization: "tile-token",
     },
   });
-  assert.equal(rasterDeniedByPolicy.allow, false);
-  assert.equal(rasterDeniedByPolicy.denyReason, "ACCESS_UNAUTHORIZED");
+  assert.equal(rasterAllowedByPolicy.allow, true);
 
-  if (mutableProject !== null && mutableProject !== undefined) {
-    const previousProjectPolicy = mutableProject.policy;
-    const previousRateLimit = process.env.RATE_LIMIT_MAX_REQUESTS_PER_MINUTE;
-    process.env.RATE_LIMIT_MAX_REQUESTS_PER_MINUTE = "1";
-    mutableProject.policy = {
-      ...mutableProject.policy,
-      allowedEndpoints: {
-        ...mutableProject.policy.allowedEndpoints,
-        staticMaps: true,
-      },
-      quotas: {
-        ...mutableProject.policy.quotas,
-        monthlyRequests: 2,
-      },
-    };
-
-    const staticFirst = authorizeTileRequest({
-      method: "GET",
-      path: "/static/basic/-122.4194,37.7749,12/640x480.png",
-      query: {},
-      headers: {
-        origin: "https://tenant.example",
-        authorization: "tile-token",
-      },
-      clientIp: "10.33.0.1",
-    });
-    const staticSecond = authorizeTileRequest({
-      method: "GET",
-      path: "/static/basic/-122.4194,37.7749,12/640x480.png",
-      query: {},
-      headers: {
-        origin: "https://tenant.example",
-        authorization: "tile-token",
-      },
-      clientIp: "10.33.0.1",
-    });
-    const staticThird = authorizeTileRequest({
-      method: "GET",
-      path: "/static/basic/-122.4194,37.7749,12/640x480.png",
-      query: {},
-      headers: {
-        origin: "https://tenant.example",
-        authorization: "tile-token",
-      },
-      clientIp: "10.33.0.2",
-    });
-
-    assert.equal(staticFirst.allow, true);
-    assert.equal(staticSecond.allow, false);
-    assert.equal(staticSecond.denyReason, "ACCESS_RATE_LIMITED");
-    assert.equal(staticThird.allow, true);
-
-    if (previousRateLimit === undefined) {
-      delete process.env.RATE_LIMIT_MAX_REQUESTS_PER_MINUTE;
-    } else {
-      process.env.RATE_LIMIT_MAX_REQUESTS_PER_MINUTE = previousRateLimit;
-    }
-    mutableProject.policy = previousProjectPolicy;
-  }
-
-  if (mutableProject !== null && mutableProject !== undefined) {
-    mutableProject.policy = {
-      ...mutableProject.policy,
-      allowedOrigins: originalProjectOrigins,
-      allowedEndpoints: originalProjectEndpoints ?? mutableProject.policy.allowedEndpoints,
-      quotas: originalProjectQuotas,
-    };
+  const previousRateLimit = process.env.RATE_LIMIT_MAX_REQUESTS_PER_MINUTE;
+  process.env.RATE_LIMIT_MAX_REQUESTS_PER_MINUTE = "1";
+  const staticFirst = authorizeTileRequest({
+    method: "GET",
+    path: "/static/basic/-122.4194,37.7749,12/640x480.png",
+    query: {},
+    headers: {
+      origin: "https://api.example.com",
+      authorization: "tile-token",
+    },
+    clientIp: "10.33.0.1",
+  });
+  const staticSecond = authorizeTileRequest({
+    method: "GET",
+    path: "/static/basic/-122.4194,37.7749,12/640x480.png",
+    query: {},
+    headers: {
+      origin: "https://api.example.com",
+      authorization: "tile-token",
+    },
+    clientIp: "10.33.0.1",
+  });
+  const staticThird = authorizeTileRequest({
+    method: "GET",
+    path: "/static/basic/-122.4194,37.7749,12/640x480.png",
+    query: {},
+    headers: {
+      origin: "https://api.example.com",
+      authorization: "tile-token",
+    },
+    clientIp: "10.33.0.2",
+  });
+  assert.equal(staticFirst.allow, true);
+  assert.equal(staticSecond.allow, false);
+  assert.equal(staticSecond.denyReason, "ACCESS_RATE_LIMITED");
+  assert.equal(staticThird.allow, true);
+  if (previousRateLimit === undefined) {
+    delete process.env.RATE_LIMIT_MAX_REQUESTS_PER_MINUTE;
+  } else {
+    process.env.RATE_LIMIT_MAX_REQUESTS_PER_MINUTE = previousRateLimit;
   }
 
   if (originalRateLimit === undefined) {

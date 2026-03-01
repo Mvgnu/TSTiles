@@ -11,10 +11,12 @@ export const enum RasterApiErrorCode {
 
 export class RasterApiError extends Error {
   public readonly code: RasterApiErrorCode;
+  public readonly details?: string;
 
-  public constructor(code: RasterApiErrorCode) {
-    super(code);
+  public constructor(code: RasterApiErrorCode, details?: string) {
+    super(details ? `${code}:${details}` : code);
     this.code = code;
+    this.details = details;
     this.name = "RasterApiError";
   }
 }

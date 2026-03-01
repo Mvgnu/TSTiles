@@ -24,7 +24,7 @@ export async function adminCreateStyleVersionRoute(
     return adminJsonResponse(201, body);
   } catch (error) {
     return adminErrorResponse(error, {
-      defaultStatus: 400,
+      defaultStatus: 503,
       defaultMessage: "Style version creation failed",
     });
   }

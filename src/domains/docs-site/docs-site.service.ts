@@ -299,9 +299,17 @@ function toOpenApiMethod(method: OpenApiRoute["method"]): OpenApiMethodKey {
 }
 
 function getDefaultStyleId(): string {
-  const published = listStyles().filter((entry) => entry.publishedVersionId);
-  const first = published[0];
-  return first?.id ?? "basic";
+  const publishedStyleIds = listStyles()
+    .filter((entry) => entry.publishedVersionId)
+    .map((entry) => entry.id)
+    .sort((left, right) => left.localeCompare(right));
+  if (publishedStyleIds.includes("docs-style")) {
+    return "docs-style";
+  }
+  if (publishedStyleIds.includes("basic")) {
+    return "basic";
+  }
+  return publishedStyleIds[0] ?? "basic";
 }
 
 function replaceStylePlaceholders(url: string, styleId: string): string {

@@ -30,7 +30,7 @@ function mapNodeErrorCode(code: string, key?: string): StorageError | undefined 
 export function mapStorageError(error: unknown, key?: string): StorageError {
   if (error instanceof StorageError) {
     if (key !== undefined) {
-      return new StorageError(error.code, error.message, key);
+      return new StorageError(error.code, error.details, key);
     }
     return error;
   }

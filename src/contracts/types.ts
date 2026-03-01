@@ -7,10 +7,12 @@ export const enum ContractErrorCode {
 
 export class ContractError extends Error {
   public readonly code: ContractErrorCode;
+  public readonly details: string;
 
-  public constructor(code: ContractErrorCode, message: string) {
-    super(message);
+  public constructor(code: ContractErrorCode, details: string) {
+    super(details);
     this.code = code;
+    this.details = details;
     this.name = "ContractError";
   }
 }

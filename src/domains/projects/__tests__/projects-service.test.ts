@@ -46,9 +46,12 @@ test("project bootstrap, identity, and policy", (): void => {
   const key = rotateApiKey(created.id);
   assert.equal(key.projectId, created.id);
   assert.equal(key.revoked, false);
+  assert.equal(typeof key.token, "string");
+  assert.equal(key.token.length > 0, true);
 
   const trimmedKey = rotateApiKey(` ${created.id} `);
   assert.equal(trimmedKey.projectId, created.id);
+  assert.equal(typeof trimmedKey.token, "string");
 
   const records = listProjects();
   assert.equal(records.some((entry) => entry.id === created.id), true);
@@ -89,9 +92,46 @@ test("project rotation returns distinct active key identities", () => {
   assert.equal(first.keyHash === second.keyHash, false);
   assert.equal(first.revoked, false);
   assert.equal(second.revoked, false);
+  assert.equal(verifyApiKey(first.token) !== null, false);
+  const verifiedSecond = verifyApiKey(second.token);
+  assert.equal(verifiedSecond !== null, true);
+  assert.equal(verifiedSecond?.keyId, second.keyId);
 
   const revokedFirst = revokeApiKey(project.id, first.keyId);
   assert.equal(revokedFirst.revoked, true);
+});
+
+test("project and key outputs are immutable snapshots", () => {
+  const project = createProject({
+    name: "Project Snapshot",
+    policy: {
+      allowedOrigins: ["https://allowed.example"],
+    },
+  });
+
+  (project.policy.allowedOrigins as string[] | undefined)?.push("https://mutated.example");
+  const policy = getProjectPolicy(project.id);
+  assert.equal(policy.allowedOrigins?.includes("https://mutated.example"), false);
+
+  const listed = listProjects().find((entry) => entry.id === project.id);
+  assert.equal(listed !== undefined, true);
+  if (listed) {
+    (listed as { name: string }).name = "Mutated Name";
+  }
+  const listedAgain = listProjects().find((entry) => entry.id === project.id);
+  assert.equal(listedAgain?.name, "Project Snapshot");
+
+  const key = rotateApiKey(project.id);
+  (key as { revoked: boolean }).revoked = true;
+  const legacy = verifyApiKey("tile-token");
+  assert.equal(legacy !== null, true);
+  if (legacy) {
+    (legacy as { revoked: boolean }).revoked = true;
+  }
+  const legacyAgain = verifyApiKey("tile-token");
+  assert.equal(legacyAgain?.revoked, false);
+  const revoked = revokeApiKey(project.id, key.keyId);
+  assert.equal(revoked.revoked, true);
 });
 
 test("revokeApiKey and deleteProject enforce lifecycle controls", () => {

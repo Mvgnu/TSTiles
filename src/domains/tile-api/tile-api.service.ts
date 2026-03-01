@@ -213,7 +213,7 @@ export async function handleTileRequest(input: TileRequest): Promise<TileRespons
   const path = normalizePath(input.path);
   const headers = normalizeHeaderMap(input.headers);
   const origin = resolveOrigin(headers);
-  const errorHeaders = {
+  let errorHeaders = {
     ...buildPreflightHeaders(origin),
     "content-type": "application/json",
     "cache-control": "no-store",
@@ -249,6 +249,11 @@ export async function handleTileRequest(input: TileRequest): Promise<TileRespons
       rawToken: pickAccessToken(input.query ?? {}),
     } satisfies AuthorizeContext);
     const cors = buildCorsHeaders(auth, origin);
+    errorHeaders = {
+      ...cors,
+      "content-type": "application/json",
+      "cache-control": "no-store",
+    };
     if (!auth.allow) {
       return {
         status: mapAccessStatus(auth.denyReason),
@@ -304,7 +309,7 @@ export async function handleMetadataRequest(input: TileRequest): Promise<TileMet
   const path = normalizePath(input.path);
   const headers = normalizeHeaderMap(input.headers);
   const origin = resolveOrigin(headers);
-  const errorHeaders = {
+  let errorHeaders = {
     ...buildPreflightHeaders(origin),
     "content-type": "application/json",
     "cache-control": "no-store",
@@ -338,6 +343,11 @@ export async function handleMetadataRequest(input: TileRequest): Promise<TileMet
       rawToken: pickAccessToken(input.query ?? {}),
     } satisfies AuthorizeContext);
     const cors = buildCorsHeaders(auth, origin);
+    errorHeaders = {
+      ...cors,
+      "content-type": "application/json",
+      "cache-control": "no-store",
+    };
     if (!auth.allow) {
       return {
         status: mapAccessStatus(auth.denyReason),

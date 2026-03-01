@@ -55,6 +55,6 @@ export function adminErrorResponse(
     });
   }
   return adminJsonResponse(options.defaultStatus, {
-    error: error instanceof Error ? error.message : options.defaultMessage,
+    error: options.defaultMessage,
   });
 }

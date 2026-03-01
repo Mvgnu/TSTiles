@@ -13,10 +13,12 @@ export const enum ProjectsErrorCode {
 
 export class ProjectsError extends Error {
   public readonly code: ProjectsErrorCode;
+  public readonly details: string;
 
   public constructor(code: ProjectsErrorCode, details: string) {
     super(`${code}:${details}`);
     this.code = code;
+    this.details = details;
     this.name = "ProjectsError";
   }
 }
@@ -54,6 +56,10 @@ export interface ApiKeyRecord {
   readonly keyIdHash: string;
   readonly createdAt: string;
   readonly revoked: boolean;
+}
+
+export interface IssuedApiKey extends ApiKeyRecord {
+  readonly token: string;
 }
 
 export interface ProjectIdentity {
