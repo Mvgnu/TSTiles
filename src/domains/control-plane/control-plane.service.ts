@@ -29,11 +29,15 @@ const auditLog: AuditEvent[] = [];
 const AUDIT_RETENTION = 50;
 const JOB_RETENTION = 25;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function normalizeErrorMessage(error: unknown): string {
-  if (error instanceof Error && "code" in error) {
-    const withCode = error as Error & { code?: unknown };
-    if (typeof withCode.code === "string") {
-      return `${withCode.code}: ${error.message}`;
+  if (error instanceof Error && isRecord(error)) {
+    const code = error.code;
+    if (typeof code === "string") {
+      return `${code}: ${error.message}`;
     }
   }
   if (error instanceof Error) {
@@ -110,30 +114,28 @@ function normalizeRequiredId(value: string, label: string): string {
 }
 
 function parseCreateProjectInput(input: unknown): ProjectCreationInput {
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
+  if (!isRecord(input)) {
     throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "Project payload is required");
   }
-  const candidate = input as {
-    readonly name?: unknown;
-    readonly policy?: unknown;
-    readonly planId?: unknown;
-  };
-  if (typeof candidate.name !== "string" || candidate.name.trim().length === 0) {
+  const name = input.name;
+  if (typeof name !== "string" || name.trim().length === 0) {
     throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "Project name is required");
   }
-  if (candidate.planId !== undefined && typeof candidate.planId !== "string") {
+  const planId = input.planId;
+  if (planId !== undefined && typeof planId !== "string") {
     throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "planId must be a string");
   }
+  const policy = input.policy;
   if (
-    candidate.policy !== undefined
-    && (typeof candidate.policy !== "object" || candidate.policy === null || Array.isArray(candidate.policy))
+    policy !== undefined
+    && !isRecord(policy)
   ) {
     throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "policy must be an object");
   }
   return {
-    name: candidate.name.trim(),
-    planId: candidate.planId,
-    policy: candidate.policy as Partial<ProjectPolicy> | undefined,
+    name: name.trim(),
+    planId,
+    policy: policy as Partial<ProjectPolicy> | undefined,
   };
 }
 
