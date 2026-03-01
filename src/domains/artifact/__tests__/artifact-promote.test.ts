@@ -44,9 +44,15 @@ const promoted = promoteArtifact("artifact-b");
 assert.equal(promoted.versionId, "artifact-b");
 const trimmedPromoted = promoteArtifact(" artifact-trimmed ");
 assert.equal(trimmedPromoted.versionId, "artifact-trimmed");
+Reflect.set(trimmedPromoted, "versionId", "mutated-pointer");
+const activeAfterPromoteMutation = getActiveArtifact();
+assert.equal(activeAfterPromoteMutation.versionId, "artifact-trimmed");
 
 const active = getActiveArtifact();
 assert.equal(active.versionId, "artifact-trimmed");
+Reflect.set(active, "versionId", "mutated-active");
+const activeAfterExternalMutation = getActiveArtifact();
+assert.equal(activeAfterExternalMutation.versionId, "artifact-trimmed");
 
 try {
   promoteArtifact("artifact-trimmed");
@@ -62,6 +68,11 @@ assert.equal(Date.parse(rollback.activeSince) >= Date.parse(beforeRollbackIso), 
 
 const all = listArtifacts();
 assert.equal(all.length >= 2, true);
+if (all[0]) {
+  Reflect.set(all[0], "id", "mutated-id");
+}
+const allReloaded = listArtifacts();
+assert.equal(allReloaded.some((entry) => entry.id === "artifact-trimmed"), true);
 
 try {
   promoteArtifact("missing-artifact");

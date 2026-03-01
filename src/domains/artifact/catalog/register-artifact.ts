@@ -1,6 +1,13 @@
 import type { ArtifactVersion } from "../types";
 import { ArtifactError, ArtifactErrorCode } from "../types";
 
+function cloneMetadata(metadata: Readonly<Record<string, string>> | undefined): Readonly<Record<string, string>> | undefined {
+  if (!metadata) {
+    return undefined;
+  }
+  return { ...metadata };
+}
+
 function canonicalMetadataValue(metadata: Readonly<Record<string, string>> | undefined): string {
   if (!metadata) {
     return "";
@@ -31,7 +38,7 @@ export function registerArtifactVersion(catalog: Map<string, ArtifactVersion>, v
   const normalizedVersion: ArtifactVersion = {
     ...version,
     id: normalizedId,
-    metadata: version.metadata,
+    metadata: cloneMetadata(version.metadata),
   };
   catalog.set(normalizedId, normalizedVersion);
   return normalizedVersion;

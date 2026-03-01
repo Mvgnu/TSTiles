@@ -5,5 +5,8 @@ export function getActivePointer(active: ActiveArtifactPointer | null): ActiveAr
   if (!active) {
     throw new ArtifactError(ArtifactErrorCode.NOT_FOUND, "No active artifact pointer");
   }
-  return active;
+  return {
+    versionId: active.versionId,
+    activeSince: active.activeSince,
+  };
 }

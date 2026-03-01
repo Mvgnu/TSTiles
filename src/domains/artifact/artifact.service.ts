@@ -11,6 +11,13 @@ const catalog = new Map<string, ArtifactVersion>();
 const activeRef: { value: ActiveArtifactPointer | null } = { value: null };
 const activeHistory: ActiveArtifactPointer[] = [];
 
+function cloneActivePointer(pointer: ActiveArtifactPointer): ActiveArtifactPointer {
+  return {
+    versionId: pointer.versionId,
+    activeSince: pointer.activeSince,
+  };
+}
+
 export function registerArtifact(version: ArtifactVersion): void {
   const validation = validateVersion(version);
   if (!validation.isValid) {
@@ -20,15 +27,15 @@ export function registerArtifact(version: ArtifactVersion): void {
 }
 
 export function getActiveArtifact(): ActiveArtifactPointer {
-  return getActivePointer(activeRef.value);
+  return cloneActivePointer(getActivePointer(activeRef.value));
 }
 
 export function promoteArtifact(versionId: string): ActiveArtifactPointer {
-  return promote({ versionId }, catalog, activeRef, activeHistory);
+  return cloneActivePointer(promote({ versionId }, catalog, activeRef, activeHistory));
 }
 
 export function rollbackArtifact(): ActiveArtifactPointer {
-  return rollback(activeHistory, activeRef);
+  return cloneActivePointer(rollback(activeHistory, activeRef));
 }
 
 export function listArtifacts(): ArtifactVersion[] {
