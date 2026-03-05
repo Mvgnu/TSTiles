@@ -12,7 +12,14 @@ function extractErrorCode(error: unknown): string | undefined {
 }
 
 function mapNodeErrorCode(code: string, key?: string): StorageError | undefined {
-  if (code === "ENOENT" || code === "NO_SUCH_KEY" || code === "NOTFOUND") {
+  if (
+    code === "ENOENT"
+    || code === "NO_SUCH_KEY"
+    || code === "NOSUCHKEY"
+    || code === "NOSUCHBUCKET"
+    || code === "NOTFOUND"
+    || code === "NOT_FOUND"
+  ) {
     return new StorageError(StorageErrorCode.NOT_FOUND, "Object not found", key);
   }
   if (code === "ETIMEDOUT" || code === "ECONNRESET" || code === "ECONNREFUSED" || code === "ENOTFOUND") {

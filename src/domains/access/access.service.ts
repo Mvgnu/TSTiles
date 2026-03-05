@@ -10,6 +10,25 @@ import { getProjectPolicy, resolveProjectIdentity } from "../projects/projects.s
 import { consumeRequestUnit } from "../metering/metering.service";
 import type { ProjectPolicy } from "../projects/types";
 
+export function resolveAllowedOrigins(
+  input: Pick<AuthorizeContext, "headers" | "rawToken">,
+): readonly string[] {
+  const config = loadConfig();
+  const headers = normalizeHeaderMap(input.headers);
+  const authHeader = headers.authorization;
+  const tokenCandidate = (input.rawToken ?? headers["x-api-token"]) ?? authHeader;
+  const projectIdentity = resolveProjectIdentity({ rawToken: tokenCandidate });
+  if (!projectIdentity) {
+    return config.security.allowedOrigins;
+  }
+  try {
+    const projectPolicy = getProjectPolicy(projectIdentity.projectId);
+    return projectPolicy.allowedOrigins ?? config.security.allowedOrigins;
+  } catch {
+    return config.security.allowedOrigins;
+  }
+}
+
 export function authorizeTileRequest(input: AuthorizeContext): AuthorizeResult {
   const config = loadConfig();
   const method = input.method;
@@ -53,23 +72,23 @@ export function authorizeTileRequest(input: AuthorizeContext): AuthorizeResult {
   if (!isOriginAllowed(origin, allowedOrigins)) {
     return deny("ACCESS_ORIGIN_DENIED");
   }
-  if (!projectIdentity) {
-    return deny("ACCESS_UNAUTHORIZED");
-  }
-  const endpointGroup = mapEndpointGroup(input.path);
-  if (projectPolicy && !isEndpointAllowed(projectPolicy, endpointGroup)) {
-    return deny("ACCESS_UNAUTHORIZED");
-  }
   let rateLimitRemaining: number | undefined;
   if (config.security.enableRateLimit) {
     const rateLimit = checkRateLimit(
-      input.clientIp ?? projectIdentity.keyId,
+      buildRateLimitClientKey(projectIdentity, input.clientIp),
       config.security.rateLimitMaxRequestsPerMinute,
     );
     if (!rateLimit.allowed) {
       return deny("ACCESS_RATE_LIMITED");
     }
     rateLimitRemaining = rateLimit.remaining;
+  }
+  if (!projectIdentity) {
+    return deny("ACCESS_UNAUTHORIZED");
+  }
+  const endpointGroup = mapEndpointGroup(input.path);
+  if (projectPolicy && !isEndpointAllowed(projectPolicy, endpointGroup)) {
+    return deny("ACCESS_UNAUTHORIZED");
   }
   const quota = consumeRequestUnit({
     projectId: projectIdentity.projectId,
@@ -91,6 +110,20 @@ export function authorizeTileRequest(input: AuthorizeContext): AuthorizeResult {
     rateLimitRemaining,
     allowedOrigins,
   };
+}
+
+function buildRateLimitClientKey(
+  identity: ReturnType<typeof resolveProjectIdentity>,
+  clientIp: string | undefined,
+): string {
+  if (identity) {
+    return `auth:${identity.projectId}:${identity.keyIdHash}`;
+  }
+  const normalizedClientIp = clientIp?.trim();
+  if (normalizedClientIp && normalizedClientIp.length > 0) {
+    return `anon:${normalizedClientIp}`;
+  }
+  return "anon:unknown";
 }
 
 function mapEndpointGroup(path: string): "tiles" | "raster" | "static" {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { loadConfig } from "../../config/load-config";
 import { ConfigError } from "../../config/types";
 import { runIngestPipeline, buildDefaultSnapshot } from "../ingest/ingest.service";
@@ -14,7 +15,7 @@ import {
   ControlPlaneError,
 } from "./types";
 import type { IngestRunReport } from "../ingest/types";
-import { isAuthorized } from "./auth/admin-auth";
+import { isAuthorized, normalizeAdminToken } from "./auth/admin-auth";
 import { createProject, rotateApiKey } from "../projects/projects.service";
 import { ProjectsError, ProjectsErrorCode, type ProjectCreationInput, type ProjectPolicy } from "../projects/types";
 import { createStyleVersion, publishStyleVersion } from "../styles/styles.service";
@@ -195,13 +196,12 @@ function nextJobId(): string {
 }
 
 function toPublicActor(token: string | undefined): string {
-  if (!token) {
+  const normalized = normalizeAdminToken(token);
+  if (!normalized) {
     return "anonymous";
   }
-  if (token.length <= 6) {
-    return `${token[0] ?? "?"}...`;
-  }
-  return `${token.slice(0, 3)}...${token.slice(-3)}`;
+  const digest = createHash("sha256").update(normalized).digest("hex").slice(0, 12);
+  return `admin:${digest}`;
 }
 
 function addAudit(event: Omit<AuditEvent, "id">): void {

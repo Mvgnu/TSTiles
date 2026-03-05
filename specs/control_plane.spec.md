@@ -87,6 +87,7 @@ Owns protected operational actions and diagnostics for administrators.
 - Health endpoints never expose sensitive configuration details.
 - Admin-only project key operations return raw key material only at issuance/rotation time.
 - In-memory job/audit telemetry uses bounded retention to avoid unbounded process memory growth.
+- Admin actor attribution is canonicalized (raw token vs `Bearer` token forms map to the same hashed actor handle).
 
 ## Error Taxonomy
 
@@ -105,7 +106,7 @@ Owns protected operational actions and diagnostics for administrators.
 ## Security and Privacy
 
 - Admin auth uses dedicated credentials separate from tile access tokens.
-- Audit logs include actor identity and operation outcome.
+- Audit logs include actor identity and operation outcome using irreversible hashed actor handles (never raw token fragments).
 
 ## Data Stores
 

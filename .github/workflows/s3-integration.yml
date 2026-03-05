@@ -1,0 +1,46 @@
+name: s3-integration
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  minio-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      minio:
+        image: minio/minio:latest
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin
+        ports:
+          - 9000:9000
+        options: >-
+          --health-cmd "curl -f http://127.0.0.1:9000/minio/health/ready || exit 1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+        command: server /data
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Run S3-compatible integration suite
+        env:
+          RUN_S3_COMPAT_INTEGRATION: "1"
+          S3_INTEGRATION_ENDPOINT: http://127.0.0.1:9000
+          S3_INTEGRATION_REGION: us-east-1
+          S3_INTEGRATION_ACCESS_KEY: minioadmin
+          S3_INTEGRATION_SECRET_KEY: minioadmin
+          S3_INTEGRATION_BUCKET: tileserver-integration
+        run: npm run test:integration:s3

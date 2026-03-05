@@ -47,6 +47,7 @@ Owns object-store IO behavior, especially HTTP range semantics for PMTiles reads
 - All range requests enforce bounded, validated byte intervals.
 - Transport errors are normalized into typed storage errors.
 - Retries are deterministic and capped by policy.
+- `OBJECT_STORE_MODE=s3-compatible` uses endpoint/credential-backed object IO (validated against MinIO integration coverage).
 
 ## Error Taxonomy
 

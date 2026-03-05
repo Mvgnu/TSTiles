@@ -44,6 +44,9 @@ Owns strict configuration schemas, environment parsing, and fail-fast startup va
 - All required config is validated at startup.
 - Invalid config prevents service start.
 - Secret values are never exposed in plain-text logs.
+- Tile delivery runtime knobs (`headEnabled`, cache TTLs, render timeout, render concurrency, renderer backend) are validated and centralized in config.
+- Service-level safety knobs such as `GLOBAL_REQUEST_BUDGET_PER_MINUTE` are validated centrally in runtime config.
+- Ingest source-size guardrail (`INGEST_MAX_SOURCE_BYTES`) is validated centrally to bound upstream download/read volume.
 - Default object-store mode is environment-aware:
   - `development` -> `memory`
   - `staging`/`production` -> `s3-compatible`

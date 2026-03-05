@@ -58,6 +58,7 @@ Owns public documentation pages, examples, and generated API reference payloads.
 ## Owned Invariants
 
 - Examples are copy-paste safe and use placeholder tokens.
+- Browser-focused examples explicitly recommend query-token auth for CORS preflight compatibility.
 - Leaflet and raster/static example URLs are resolved against current published style IDs.
 - API reference output stays compatible with exported contracts.
 - Public docs never expose admin-only endpoints without auth notes.

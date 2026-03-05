@@ -1,8 +1,8 @@
 import { strict as assert } from "node:assert";
 import { loadConfig } from "../../../config/load-config";
-import { authorizeTileRequest, buildCorsHeaders } from "../access.service";
+import { authorizeTileRequest, buildCorsHeaders, resolveAllowedOrigins } from "../access.service";
 import type { AuthorizeContext as DomainAuthorizeContext } from "../types";
-import { listProjects } from "../../projects/projects.service";
+import { createProject, listProjects, rotateApiKey } from "../../projects/projects.service";
 
 type TestFunction = (name: string, fn: () => void | Promise<void>) => void;
 const test: TestFunction = ((globalThis as { test?: TestFunction }).test ?? ((_, fn) => {
@@ -17,7 +17,7 @@ test("authorize tile request policy", () => {
     ALLOWED_TILES_TOKENS: "tile-token",
     NODE_ENV: "development",
     ENABLE_RATE_LIMIT: "true",
-    RATE_LIMIT_MAX_REQUESTS_PER_MINUTE: "2",
+    RATE_LIMIT_MAX_REQUESTS_PER_MINUTE: "10",
   };
 
   Object.assign(process.env, baseEnv);
@@ -161,6 +161,15 @@ test("authorize tile request policy", () => {
       authorization: "tile-token",
     },
   });
+  const invalidStaticMercatorLatitude = authorizeTileRequest({
+    method: "GET",
+    path: "/v1/static/basic/-122.4194,85.2,12/640x480.png",
+    query: {},
+    headers: {
+      origin: "https://example.com",
+      authorization: "tile-token",
+    },
+  });
   const invalidStaticLongitude = authorizeTileRequest({
     method: "GET",
     path: "/v1/static/basic/-222.4194,37.7749,12/640x480.png",
@@ -240,7 +249,7 @@ test("authorize tile request policy", () => {
   assert.equal(originDenied.allow, false);
   assert.equal(originDenied.denyReason, "ACCESS_ORIGIN_DENIED");
   const deniedCorsHeaders = buildCorsHeaders(originDenied, "https://bad.example.com");
-  assert.equal(deniedCorsHeaders["access-control-allow-origin"], "*");
+  assert.equal(deniedCorsHeaders["access-control-allow-origin"], "null");
   assert.equal(unauthorizedResult.allow, false);
   assert.equal(unauthorizedResult.denyReason, "ACCESS_UNAUTHORIZED");
   assert.equal(unauthorizedResult.sanitizedIdentity, "anon");
@@ -259,6 +268,8 @@ test("authorize tile request policy", () => {
   assert.equal(excessiveStaticZoom.denyReason, "ACCESS_BAD_REQUEST");
   assert.equal(invalidStaticLatitude.allow, false);
   assert.equal(invalidStaticLatitude.denyReason, "ACCESS_BAD_REQUEST");
+  assert.equal(invalidStaticMercatorLatitude.allow, false);
+  assert.equal(invalidStaticMercatorLatitude.denyReason, "ACCESS_BAD_REQUEST");
   assert.equal(invalidStaticLongitude.allow, false);
   assert.equal(invalidStaticLongitude.denyReason, "ACCESS_BAD_REQUEST");
   assert.equal(invalidTileOutOfRange.allow, false);
@@ -277,6 +288,10 @@ test("authorize tile request policy", () => {
   assert.equal(invalidRasterEncodedSlashStyleId.denyReason, "ACCESS_BAD_REQUEST");
 
   const limitedClientIp = "10.0.0.1";
+  const limitedProject = createProject({
+    name: "Access Rate Limit Project",
+  });
+  const limitedKey = rotateApiKey(limitedProject.id);
   process.env.RATE_LIMIT_MAX_REQUESTS_PER_MINUTE = "1";
   const limitedA: DomainAuthorizeContext = {
     method: "GET",
@@ -284,7 +299,7 @@ test("authorize tile request policy", () => {
     query: {},
     headers: {
       origin: "https://example.com",
-      authorization: "tile-token",
+      authorization: limitedKey.token,
     },
     clientIp: limitedClientIp,
   };
@@ -420,7 +435,7 @@ test("authorize tile request policy", () => {
   });
   assert.equal(projectDeniedByPolicy.allow, false);
   const projectHeaders = buildCorsHeaders(projectDeniedByPolicy, "https://other.example.net");
-  assert.equal(projectHeaders["access-control-allow-origin"], "*");
+  assert.equal(projectHeaders["access-control-allow-origin"], "null");
   const rasterAllowedByPolicy = authorizeTileRequest({
     method: "GET",
     path: "/raster/basic/2/2/3.png",
@@ -434,13 +449,25 @@ test("authorize tile request policy", () => {
 
   const previousRateLimit = process.env.RATE_LIMIT_MAX_REQUESTS_PER_MINUTE;
   process.env.RATE_LIMIT_MAX_REQUESTS_PER_MINUTE = "1";
+  const staticRateLimitProject = createProject({
+    name: "Access Static Rate Limit Project",
+    policy: {
+      allowedOrigins: ["https://api.example.com"],
+      allowedEndpoints: {
+        tiles: true,
+        raster: false,
+        staticMaps: true,
+      },
+    },
+  });
+  const staticRateLimitKey = rotateApiKey(staticRateLimitProject.id);
   const staticFirst = authorizeTileRequest({
     method: "GET",
     path: "/static/basic/-122.4194,37.7749,12/640x480.png",
     query: {},
     headers: {
       origin: "https://api.example.com",
-      authorization: "tile-token",
+      authorization: staticRateLimitKey.token,
     },
     clientIp: "10.33.0.1",
   });
@@ -450,7 +477,7 @@ test("authorize tile request policy", () => {
     query: {},
     headers: {
       origin: "https://api.example.com",
-      authorization: "tile-token",
+      authorization: staticRateLimitKey.token,
     },
     clientIp: "10.33.0.1",
   });
@@ -460,14 +487,15 @@ test("authorize tile request policy", () => {
     query: {},
     headers: {
       origin: "https://api.example.com",
-      authorization: "tile-token",
+      authorization: staticRateLimitKey.token,
     },
     clientIp: "10.33.0.2",
   });
   assert.equal(staticFirst.allow, true);
   assert.equal(staticSecond.allow, false);
   assert.equal(staticSecond.denyReason, "ACCESS_RATE_LIMITED");
-  assert.equal(staticThird.allow, true);
+  assert.equal(staticThird.allow, false);
+  assert.equal(staticThird.denyReason, "ACCESS_RATE_LIMITED");
   if (previousRateLimit === undefined) {
     delete process.env.RATE_LIMIT_MAX_REQUESTS_PER_MINUTE;
   } else {
@@ -484,4 +512,71 @@ test("authorize tile request policy", () => {
   } else {
     process.env.ALLOWED_ORIGINS = originalAllowlist;
   }
+});
+
+test("resolveAllowedOrigins uses project-scoped origins when token is provided", (): void => {
+  process.env.OBJECT_STORE_BUCKET = "test-bucket";
+  process.env.ADMIN_TOKEN = "admin-token";
+  process.env.ALLOWED_ORIGINS = "https://example.com";
+  process.env.ALLOWED_TILES_TOKENS = "tile-token";
+  process.env.NODE_ENV = "development";
+
+  const project = createProject({
+    name: "Cors Scoped Project",
+    policy: {
+      allowedOrigins: ["https://tenant.example"],
+    },
+  });
+  const key = rotateApiKey(project.id);
+  const scopedOrigins = resolveAllowedOrigins({
+    headers: {
+      origin: "https://tenant.example",
+    },
+    rawToken: key.token,
+  });
+  assert.equal(scopedOrigins.includes("https://tenant.example"), true);
+  assert.equal(scopedOrigins.includes("https://example.com"), false);
+
+  const fallbackOrigins = resolveAllowedOrigins({
+    headers: {
+      origin: "https://tenant.example",
+    },
+    rawToken: "invalid-token",
+  });
+  assert.equal(fallbackOrigins.includes("https://example.com"), true);
+});
+
+test("authorizeTileRequest rate limits anonymous requests per client ip", (): void => {
+  process.env.OBJECT_STORE_BUCKET = "test-bucket";
+  process.env.ADMIN_TOKEN = "admin-token";
+  process.env.ALLOWED_ORIGINS = "https://example.com";
+  process.env.ALLOWED_TILES_TOKENS = "tile-token";
+  process.env.NODE_ENV = "development";
+  process.env.ENABLE_RATE_LIMIT = "true";
+  process.env.RATE_LIMIT_MAX_REQUESTS_PER_MINUTE = "1";
+
+  const anonymousRequest: DomainAuthorizeContext = {
+    method: "GET",
+    path: "/tiles/2/2/3.mvt",
+    query: {},
+    headers: {
+      origin: "https://example.com",
+      authorization: "wrong-token",
+    },
+    clientIp: "198.51.100.77",
+  };
+
+  const first = authorizeTileRequest(anonymousRequest);
+  const second = authorizeTileRequest(anonymousRequest);
+  const third = authorizeTileRequest({
+    ...anonymousRequest,
+    clientIp: "198.51.100.78",
+  });
+
+  assert.equal(first.allow, false);
+  assert.equal(first.denyReason, "ACCESS_UNAUTHORIZED");
+  assert.equal(second.allow, false);
+  assert.equal(second.denyReason, "ACCESS_RATE_LIMITED");
+  assert.equal(third.allow, false);
+  assert.equal(third.denyReason, "ACCESS_UNAUTHORIZED");
 });

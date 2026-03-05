@@ -10,6 +10,7 @@ Storage policy baseline:
 
 ## Domains
 
+- `specs/release_readiness.md`: Cross-domain exit criteria tracker and stop-point gates for final push.
 - `specs/contracts.spec.md`: Stable shared contracts to avoid circular dependencies.
 - `specs/config.spec.md`: Typed runtime configuration and secret validation.
 - `specs/storage.spec.md`: Object-store access and range-read semantics.

@@ -343,6 +343,41 @@ test("consumeRequestUnit denies unknown endpoint groups and does not count usage
   assert.equal(summary.length, 0);
 });
 
+test("consumeRequestUnit enforces global minute budget across endpoint groups", () => {
+  const originalGlobalBudget = process.env.GLOBAL_REQUEST_BUDGET_PER_MINUTE;
+  process.env.GLOBAL_REQUEST_BUDGET_PER_MINUTE = "2";
+  const project = makeProjectWithPolicy({
+    quotas: {
+      minuteRequests: 100,
+      dailyRequests: 100,
+      monthlyRequests: 100,
+    },
+  });
+  const key = rotateApiKey(project.id);
+  const identity = {
+    projectId: key.projectId,
+    keyHash: key.keyHash,
+    planId: project.planId,
+  };
+
+  withFrozenTime("2026-06-15T12:34:00.000Z", () => {
+    const first = consumeRequestUnit(identity, "tiles");
+    const second = consumeRequestUnit(identity, "raster");
+    const third = consumeRequestUnit(identity, "static");
+    assert.equal(first.allow, true);
+    assert.equal(second.allow, true);
+    assert.equal(third.allow, false);
+    assert.equal(third.denyReason, "rate_limit");
+    assert.equal(third.limit, 2);
+  });
+
+  if (originalGlobalBudget === undefined) {
+    delete process.env.GLOBAL_REQUEST_BUDGET_PER_MINUTE;
+  } else {
+    process.env.GLOBAL_REQUEST_BUDGET_PER_MINUTE = originalGlobalBudget;
+  }
+});
+
 test("computeBillingEstimate resolves plan from usage summary when no plan is provided", () => {
   const summary: UsageSummary = {
     projectId: "project-1",

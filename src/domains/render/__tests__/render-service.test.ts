@@ -261,6 +261,27 @@ test("renderStaticMap rejects non-finite coordinates", async () => {
   }
 });
 
+test("renderStaticMap rejects latitude outside Web Mercator bounds", async () => {
+  const styleId = `style-${randomUUID().slice(0, 8)}`;
+  publishStyle(styleId);
+
+  try {
+    await renderStaticMap({
+      styleId,
+      lon: 0,
+      lat: 85.2,
+      zoom: 5,
+      width: 256,
+      height: 256,
+      format: "png",
+    });
+    assert.fail("expected bad request");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    assert.equal(message.startsWith("RENDER_BAD_REQUEST"), true);
+  }
+});
+
 test("renderStaticMap rejects zoom values above supported range", async () => {
   const styleId = `style-${randomUUID().slice(0, 8)}`;
   publishStyle(styleId);

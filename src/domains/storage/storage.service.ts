@@ -10,12 +10,17 @@ import {
   type RangeReadResult,
   type StorageFactory,
 } from "./types";
-import { InMemoryObjectStoreClient } from "./adapters/s3-compatible-client";
+import {
+  InMemoryObjectStoreClient,
+  S3CompatibleObjectStoreClient,
+  type KeyValueObjectStoreClient,
+} from "./adapters/s3-compatible-client";
 import { clampRange } from "./adapters/range-reader";
 import { withRetry } from "./adapters/retry-policy";
 import { mapStorageError } from "./adapters/error-mapper";
 
 const objectStoreByBucket = new Map<string, InMemoryObjectStoreClient>();
+const s3StoreByConfigKey = new Map<string, S3CompatibleObjectStoreClient>();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -120,7 +125,7 @@ async function getRangeForFileUrlObject(
 }
 
 const defaultCreateObjectStore = (config: RuntimeConfig): ObjectStore => {
-  const backend = getBackend(config.storage.bucketName);
+  const backend = getBackend(config);
 
   const getRange = async (input: RangeReadRequest): Promise<RangeReadResult> => {
     const key = normalizeObjectKey(input.key);
@@ -196,7 +201,34 @@ export function setCreateObjectStore(factory: StorageFactory | undefined): void 
   createObjectStoreImpl = factory ?? defaultCreateObjectStore;
 }
 
-function getBackend(bucketName: string): InMemoryObjectStoreClient {
+function buildS3BackendKey(storage: RuntimeConfig["storage"]): string {
+  return [
+    storage.bucketName,
+    storage.region ?? "",
+    storage.endpoint ?? "",
+    storage.accessKeyId ?? "",
+  ].join("|");
+}
+
+function getS3Backend(config: RuntimeConfig): S3CompatibleObjectStoreClient {
+  const key = buildS3BackendKey(config.storage);
+  const existing = s3StoreByConfigKey.get(key);
+  if (existing) {
+    return existing;
+  }
+  const created = new S3CompatibleObjectStoreClient(config.storage);
+  s3StoreByConfigKey.set(key, created);
+  return created;
+}
+
+function getBackend(config: RuntimeConfig): KeyValueObjectStoreClient {
+  if (config.storage.mode === "s3-compatible") {
+    return getS3Backend(config);
+  }
+  return getMemoryBackend(config.storage.bucketName);
+}
+
+function getMemoryBackend(bucketName: string): InMemoryObjectStoreClient {
   const existing = objectStoreByBucket.get(bucketName);
   if (existing) {
     return existing;

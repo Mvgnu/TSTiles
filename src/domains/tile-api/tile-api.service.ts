@@ -1,4 +1,4 @@
-import { authorizeTileRequest, buildCorsHeaders } from "../access/access.service";
+import { authorizeTileRequest, buildCorsHeaders, resolveAllowedOrigins } from "../access/access.service";
 import {
   TileApiError,
   TileApiErrorCode,
@@ -62,10 +62,13 @@ function buildPreflightHeaders(origin?: string): Record<string, string> {
     {
       allow: true,
       sanitizedIdentity: "preflight",
+      allowedOrigins: undefined,
     },
     origin,
   );
 }
+
+const preflightVaryHeader = "origin,access-control-request-method,access-control-request-headers";
 
 function parseTilePath(path: string): { z: number; x: number; y: number } {
   const match = tilePathRegex.exec(path);
@@ -221,20 +224,37 @@ export async function handleTileRequest(input: TileRequest): Promise<TileRespons
   try {
     const normalizedPath = stripV1Prefix(path);
     if (input.method === "OPTIONS") {
+      const allowedOrigins = resolveAllowedOrigins({
+        headers,
+        rawToken: pickAccessToken(input.query ?? {}),
+      });
+      const preflightHeaders = buildCorsHeaders(
+        {
+          allow: true,
+          sanitizedIdentity: "preflight",
+          allowedOrigins,
+        },
+        origin,
+      );
       try {
         parseTilePath(normalizedPath);
         return {
           status: 204,
           headers: {
-            ...buildPreflightHeaders(origin),
-            vary: "origin",
+            ...preflightHeaders,
+            vary: preflightVaryHeader,
           },
         };
       } catch {
         return {
           status: 400,
           body: encodeJsonError(TileApiErrorCode.BAD_COORDINATES),
-          headers: errorHeaders,
+          headers: {
+            ...preflightHeaders,
+            "content-type": "application/json",
+            "cache-control": "no-store",
+            vary: preflightVaryHeader,
+          },
         };
       }
     }
@@ -317,18 +337,35 @@ export async function handleMetadataRequest(input: TileRequest): Promise<TileMet
   try {
     const normalizedPath = stripV1Prefix(path);
     if (input.method === "OPTIONS") {
+      const allowedOrigins = resolveAllowedOrigins({
+        headers,
+        rawToken: pickAccessToken(input.query ?? {}),
+      });
+      const preflightHeaders = buildCorsHeaders(
+        {
+          allow: true,
+          sanitizedIdentity: "preflight",
+          allowedOrigins,
+        },
+        origin,
+      );
       if (normalizedPath !== metadataPath) {
         return {
           status: 400,
           body: JSON.stringify({ error: TileApiErrorCode.BAD_COORDINATES }),
-          headers: errorHeaders,
+          headers: {
+            ...preflightHeaders,
+            "content-type": "application/json",
+            "cache-control": "no-store",
+            vary: preflightVaryHeader,
+          },
         };
       }
       return {
         status: 204,
         headers: {
-          ...buildPreflightHeaders(origin),
-          vary: "origin",
+          ...preflightHeaders,
+          vary: preflightVaryHeader,
         },
       };
     }

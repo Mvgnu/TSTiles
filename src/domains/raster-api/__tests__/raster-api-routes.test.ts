@@ -116,6 +116,30 @@ test("raster and static routes resolve and enforce request semantics", async ():
   assert.equal(rasterOptionsWithoutAuth.status, 204);
   assert.equal(rasterOptionsWithoutAuth.headers["access-control-allow-origin"], "https://example.com");
 
+  const tenantPreflightProject = createProject({
+    name: "Tenant Preflight Raster Project",
+    policy: {
+      allowedOrigins: ["https://tenant.example"],
+    },
+  });
+  const tenantPreflightKey = rotateApiKey(tenantPreflightProject.id);
+  const rasterOptionsWithTenantToken = await handleRasterTileRequest({
+    method: "OPTIONS",
+    path: "/v1/raster/basic/2/2/3.png",
+    query: {
+      access_token: tenantPreflightKey.token,
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(rasterOptionsWithTenantToken.status, 204);
+  assert.equal(rasterOptionsWithTenantToken.headers["access-control-allow-origin"], "https://tenant.example");
+  assert.equal(
+    rasterOptionsWithTenantToken.headers.vary,
+    "origin,access-control-request-method,access-control-request-headers",
+  );
+
   const staticOptionsWithoutAuth = await handleStaticMapRequest({
     method: "OPTIONS",
     path: "/v1/static/basic/-122.4194,37.7749,12/640x480.webp",
@@ -306,6 +330,21 @@ test("raster and static routes resolve and enforce request semantics", async ():
     assert.equal(payload.error, "STATIC_BAD_REQUEST");
   }
 
+  const staticLatOutsideMercator = await handleStaticMapRequest({
+    method: "GET",
+    path: "/v1/static/basic/-122.4194,85.2,12/640x480.webp",
+    headers: {
+      origin: "https://example.com",
+      authorization: "tile-token",
+    },
+  });
+  assert.equal(staticLatOutsideMercator.status, 400);
+  assert.equal(staticLatOutsideMercator.headers["cache-control"], "no-store");
+  if (staticLatOutsideMercator.body !== undefined) {
+    const payload = JSON.parse(new TextDecoder().decode(staticLatOutsideMercator.body)) as { error?: string };
+    assert.equal(payload.error, "STATIC_BAD_REQUEST");
+  }
+
   const staticLonOutOfRange = await handleStaticMapRequest({
     method: "GET",
     path: "/v1/static/basic/-222.4194,37.7749,12/640x480.webp",
@@ -488,6 +527,43 @@ test("raster and static routes resolve and enforce request semantics", async ():
   assert.equal(badMethod.status, 400);
   assert.equal(badMethod.headers["access-control-allow-origin"], "https://example.com");
   assert.equal(badMethod.headers["cache-control"], "no-store");
+
+  const originalMaxConcurrent = process.env.RENDER_MAX_CONCURRENT;
+  process.env.RENDER_MAX_CONCURRENT = "0";
+  const saturatedRaster = await handleRasterTileRequest({
+    method: "GET",
+    path: "/v1/raster/basic/2/2/3.png",
+    headers: {
+      origin: "https://example.com",
+      authorization: "tile-token",
+    },
+  });
+  assert.equal(saturatedRaster.status, 503);
+  assert.equal(saturatedRaster.headers["cache-control"], "no-store");
+  if (saturatedRaster.body !== undefined) {
+    const payload = JSON.parse(new TextDecoder().decode(saturatedRaster.body)) as { error?: string };
+    assert.equal(payload.error, "RASTER_RENDER_FAILED");
+  }
+
+  const saturatedStatic = await handleStaticMapRequest({
+    method: "GET",
+    path: "/v1/static/basic/-122.4194,37.7749,12/640x480.png",
+    headers: {
+      origin: "https://example.com",
+      authorization: "tile-token",
+    },
+  });
+  assert.equal(saturatedStatic.status, 503);
+  assert.equal(saturatedStatic.headers["cache-control"], "no-store");
+  if (saturatedStatic.body !== undefined) {
+    const payload = JSON.parse(new TextDecoder().decode(saturatedStatic.body)) as { error?: string };
+    assert.equal(payload.error, "RASTER_RENDER_FAILED");
+  }
+  if (originalMaxConcurrent === undefined) {
+    delete process.env.RENDER_MAX_CONCURRENT;
+  } else {
+    process.env.RENDER_MAX_CONCURRENT = originalMaxConcurrent;
+  }
 
   const denied = await handleRasterTileRequest({
     method: "GET",

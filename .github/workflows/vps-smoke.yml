@@ -1,0 +1,47 @@
+name: vps-smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Deployed tileserver base URL (for example https://tiles.example.com)"
+        required: true
+        type: string
+      origin:
+        description: "Origin header used for preflight checks"
+        required: false
+        default: "https://example.com"
+        type: string
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Verify smoke token secret
+        env:
+          TOKEN: ${{ secrets.TILESERVER_SMOKE_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "Missing required secret: TILESERVER_SMOKE_TOKEN"
+            exit 1
+          fi
+
+      - name: Run VPS smoke checks
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+          ORIGIN: ${{ inputs.origin }}
+          TOKEN: ${{ secrets.TILESERVER_SMOKE_TOKEN }}
+        run: npm run smoke:e2e

@@ -13,11 +13,13 @@ export function buildCorsHeaders(
   const isAllowedOrigin = !origin
     ? true
     : allowAnyOrigin || isOriginAllowed(origin, policyAllowedOrigins);
-  const allowOrigin = allowAnyOrigin || !origin
+  const allowOrigin = allowAnyOrigin
     ? "*"
-    : isAllowedOrigin
-      ? origin
-      : "*";
+    : !origin
+      ? "*"
+      : isAllowedOrigin
+        ? origin
+        : "null";
   const headers: Record<string, string> = {
     "access-control-allow-methods": "GET,HEAD,OPTIONS",
     "access-control-allow-headers": "authorization,content-type",

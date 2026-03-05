@@ -47,6 +47,7 @@ Owns byte-level vector tile and metadata resolution from active PMTiles artifact
 - Must not read request headers or access tokens.
 - Must not compute CORS or HTTP response headers.
 - Returns response-header seeds only (`etagSeed`, `contentType`, `byteLength`).
+- A single tile resolve performs bounded origin IO fanout (one metadata head + one range read in the current PMTiles adapter flow).
 
 ## Error Taxonomy
 

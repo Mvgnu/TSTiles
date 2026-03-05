@@ -17,6 +17,7 @@ exports:
 consumes:
   - styles.getStyle
   - tile_resolver.resolveVectorTile
+  - config.TileDeliveryPolicy
 verification:
   typecheck: "npx tsc --noEmit"
   test: "vitest run src/domains/render/__tests__/ --globals --passWithNoTests"
@@ -43,8 +44,9 @@ Owns raster tile and static image rendering, isolated from vector hot-path deliv
 
 - Renderer accepts style IDs/versions, not arbitrary user style JSON.
 - Render output cache keys include style version and artifact identity.
-- Renderer backend is pluggable (`remote` first, `local-native` later).
+- Renderer backend is pluggable and selected through validated runtime config (`config.tileDeliveryPolicy.renderBackend` from `RENDER_BACKEND`).
 - Static map lon/lat conversion keeps `lon=180` on the east-edge tile boundary.
+- Static map coordinates are validated for Web Mercator bounds (`lon: -180..180`, `lat: -85.05112878..85.05112878`) before tile resolution.
 
 ## Error Taxonomy
 
@@ -55,5 +57,5 @@ Owns raster tile and static image rendering, isolated from vector hot-path deliv
 
 ## Dependency Direction
 
-- May depend on `styles` and `tile_resolver`.
+- May depend on `styles`, `tile_resolver`, and `config`.
 - Must not depend on HTTP routing domains (`tile_api`, `raster_api`).

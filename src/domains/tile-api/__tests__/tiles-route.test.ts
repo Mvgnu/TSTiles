@@ -168,6 +168,30 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
   assert.equal(optionsWithoutAuth.status, 204);
   assert.equal(optionsWithoutAuth.headers["access-control-allow-origin"], "https://example.com");
 
+  const tenantPreflightProject = createProject({
+    name: "Tenant Preflight Tile Project",
+    policy: {
+      allowedOrigins: ["https://tenant.example"],
+    },
+  });
+  const tenantPreflightKey = rotateApiKey(tenantPreflightProject.id);
+  const optionsWithTenantToken = await handleTileRequest({
+    method: "OPTIONS",
+    path: "/tiles/2/2/3.mvt",
+    query: {
+      access_token: tenantPreflightKey.token,
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(optionsWithTenantToken.status, 204);
+  assert.equal(optionsWithTenantToken.headers["access-control-allow-origin"], "https://tenant.example");
+  assert.equal(
+    optionsWithTenantToken.headers.vary,
+    "origin,access-control-request-method,access-control-request-headers",
+  );
+
   const optionsBadPath = await handleTileRequest({
     method: "OPTIONS",
     path: "/tiles/bad",

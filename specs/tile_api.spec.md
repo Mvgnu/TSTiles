@@ -17,6 +17,7 @@ exports:
   - handleHealthRequest
 consumes:
   - access.authorizeTileRequest
+  - access.resolveAllowedOrigins
   - tile_resolver.resolveVectorTile
   - tile_resolver.resolveMetadata
   - tile_resolver.ResolverErrorCode
@@ -61,6 +62,7 @@ Owns `/v1/tiles/{z}/{x}/{y}.mvt` request handling (with optional `/v1` prefix no
 - Cache key includes active artifact identity and normalized tile path.
 - Tile/metadata byte resolution is delegated to `tile_resolver`.
 - OPTIONS requests are short-circuited for valid tile/metadata paths and do not require token auth.
+  If a token is provided (e.g., query token), preflight CORS policy is resolved project-scoped; otherwise global allowlist fallback is used.
 - `HEAD` responses are only served when `HEAD_ENABLED=true`; if disabled, handler returns `405` with `HEAD_DISABLED`.
   `HEAD_DISABLED` responses for HEAD requests are body-less.
 

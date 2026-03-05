@@ -21,6 +21,7 @@ exports:
   - computeBillingEstimate
 consumes:
   - contracts.DeliverySignal
+  - config.TileDeliveryPolicy
   - projects.ProjectPolicy
   - projects.getProjectPolicy
 verification:
@@ -53,6 +54,7 @@ Owns usage accounting and quota gating before cache/origin reads.
 - Delivery-signal recording is async and lossy; quota checks are strict, deterministic, and always checked first.
 - Raw keys are never persisted; all records use hashed key identity.
 - Minute window breaches return `denyReason: rate_limit`.
+- Optional global minute fuse (`GLOBAL_REQUEST_BUDGET_PER_MINUTE`) caps total accepted metered requests across endpoint groups.
 
 ## Error Taxonomy
 

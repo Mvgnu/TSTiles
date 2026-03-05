@@ -196,3 +196,60 @@ test("resolveVectorTile maps storage precondition failures to artifact unavailab
     setCreateObjectStore(undefined);
   }
 });
+
+test("resolveVectorTile performs bounded origin operations per request", async () => {
+  const artifactId = `artifact-op-budget-${Math.random().toString(16).slice(2)}`;
+  const artifactKey = `${artifactId}/tiles.pmtiles`;
+  registerArtifact({
+    id: artifactId,
+    key: artifactKey,
+    checksum: `checksum-${artifactId}`,
+    byteSize: 2048,
+    createdAt: new Date().toISOString(),
+    validated: true,
+  });
+  promoteArtifact(artifactId);
+
+  let headCalls = 0;
+  let rangeCalls = 0;
+  setCreateObjectStore((): ObjectStore => ({
+    head: async () => {
+      headCalls += 1;
+      return {
+        key: artifactKey,
+        size: 4096,
+        etag: "etag-budget",
+        contentType: "application/octet-stream",
+        lastModified: new Date().toISOString(),
+      };
+    },
+    getRange: async ({ start, end }) => {
+      rangeCalls += 1;
+      return {
+        key: artifactKey,
+        bytes: new Uint8Array([1, 2, 3]),
+        start: start ?? 0,
+        end: end ?? 2,
+        totalBytes: 4096,
+        contentType: "application/octet-stream",
+        etag: "etag-budget",
+      };
+    },
+    putObject: async () => {
+      throw new StorageError(StorageErrorCode.PRECONDITION_FAILED, "read-only");
+    },
+  }));
+  try {
+    const resolved = await resolveVectorTile({
+      z: 2,
+      x: 2,
+      y: 3,
+      artifactId,
+    });
+    assert.equal(resolved.bytes.byteLength, 3);
+    assert.equal(headCalls, 1);
+    assert.equal(rangeCalls, 1);
+  } finally {
+    setCreateObjectStore(undefined);
+  }
+});

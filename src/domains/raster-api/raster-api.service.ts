@@ -1,7 +1,7 @@
 import { normalizeHeaderMap } from "../../contracts/contracts";
 import { loadConfig } from "../../config/load-config";
 import type { AuthorizeContext } from "../../contracts/types";
-import { authorizeTileRequest, buildCorsHeaders } from "../access/access.service";
+import { authorizeTileRequest, buildCorsHeaders, resolveAllowedOrigins } from "../access/access.service";
 import { renderRasterTile, renderStaticMap } from "../render/render.service";
 import { RenderError, RenderErrorCode, type RasterTileRequest, type StaticMapRequest, type RenderedImage } from "../render/types";
 import { RasterApiError, RasterApiErrorCode, type RasterRequest, type RasterResponse } from "./types";
@@ -30,7 +30,8 @@ const rasterPathRegex = /^\/(?:v1\/)?raster\/([^/]+)\/(\d+)\/(\d+)\/(\d+)\.(png|
 const staticPathRegex = /^\/(?:v1\/)?static\/([^/]+)\/(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(\d+(?:\.\d+)?)\/(\d+)x(\d+)\.(png|webp)$/;
 const maxStaticDimension = 4096;
 const maxStaticZoom = 30;
-const defaultRenderTimeoutMs = 15_000;
+const maxMercatorLatitude = 85.05112878;
+let activeRenderRequests = 0;
 
 function throwRasterApiError(code: RasterApiErrorCode): never {
   throw new RasterApiError(code);
@@ -121,7 +122,7 @@ function assertStaticRequestBounds(zoom: number, width: number, height: number):
 }
 
 function assertStaticCoordinates(lon: number, lat: number): void {
-  if (lon < -180 || lon > 180 || lat < -90 || lat > 90) {
+  if (lon < -180 || lon > 180 || lat < -maxMercatorLatitude || lat > maxMercatorLatitude) {
     throwRasterApiError(RasterApiErrorCode.STATIC_BAD_REQUEST);
   }
 }
@@ -130,17 +131,6 @@ function mapDenyStatus(reason?: string): number {
   return reason === "ACCESS_RATE_LIMITED" || reason === "ACCESS_QUOTA_EXCEEDED" ? 429 : reason === "ACCESS_ORIGIN_DENIED" ? 403 : reason === "ACCESS_UNAUTHORIZED" ? 401 : 400;
 }
 
-function renderTimeoutMs(): number {
-  const raw = process.env.RENDER_TIMEOUT_MS;
-  if (raw === undefined) {
-    return defaultRenderTimeoutMs;
-  }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
-    return defaultRenderTimeoutMs;
-  }
-  return parsed;
-}
 
 function parseFormat(
   value: string | undefined,
@@ -278,10 +268,13 @@ function buildPreflightHeaders(origin?: string): RasterResponse["headers"] {
     {
       allow: true,
       sanitizedIdentity: "preflight",
+      allowedOrigins: undefined,
     },
     origin,
   );
 }
+
+const preflightVaryHeader = "origin,access-control-request-method,access-control-request-headers";
 
 function asAuthorizeContext(input: RasterRequest): AuthorizeContext {
   const headers = normalizeHeaderMap(input.headers);
@@ -312,11 +305,11 @@ function isExpectedKind(match: RasterPathMatch, expectedKind?: "raster" | "stati
   return expectedKind === undefined || match.request.kind === expectedKind;
 }
 
-async function withRenderTimeout<T>(work: Promise<T>): Promise<T> {
+async function withRenderTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timeout = setTimeout(() => {
       reject(new RenderError(RenderErrorCode.BACKEND_UNAVAILABLE, "timeout"));
-    }, renderTimeoutMs());
+    }, timeoutMs);
     work.then((result) => {
       clearTimeout(timeout);
       resolve(result);
@@ -325,6 +318,24 @@ async function withRenderTimeout<T>(work: Promise<T>): Promise<T> {
       reject(error);
     });
   });
+}
+
+async function withRenderCapacity<T>(
+  work: Promise<T>,
+  limits: {
+    readonly timeoutMs: number;
+    readonly maxConcurrent: number;
+  },
+): Promise<T> {
+  if (activeRenderRequests >= limits.maxConcurrent) {
+    throw new RenderError(RenderErrorCode.BACKEND_UNAVAILABLE, "saturated");
+  }
+  activeRenderRequests += 1;
+  try {
+    return await withRenderTimeout(work, limits.timeoutMs);
+  } finally {
+    activeRenderRequests -= 1;
+  }
 }
 
 async function handleRasterRequest(
@@ -340,6 +351,18 @@ async function handleRasterRequest(
     "cache-control": "no-store",
   };
   if (isOptions(input)) {
+    const allowedOrigins = resolveAllowedOrigins({
+      headers: requestHeaders,
+      rawToken: pickAccessToken(input.query),
+    });
+    const preflightHeaders = buildCorsHeaders(
+      {
+        allow: true,
+        sanitizedIdentity: "preflight",
+        allowedOrigins,
+      },
+      origin,
+    );
     try {
       const parsed = parseRasterPath(path);
       if (!isExpectedKind(parsed, expectedKind)) {
@@ -348,8 +371,8 @@ async function handleRasterRequest(
       return {
         status: 204,
         headers: {
-          ...buildPreflightHeaders(origin),
-          vary: "origin",
+          ...preflightHeaders,
+          vary: preflightVaryHeader,
         },
       };
     } catch (error) {
@@ -357,7 +380,12 @@ async function handleRasterRequest(
       return {
         status: 400,
         body: encodeJsonError(mappedMessage),
-        headers: errorHeaders,
+        headers: {
+          ...preflightHeaders,
+          "content-type": "application/json",
+          "cache-control": "no-store",
+          vary: preflightVaryHeader,
+        },
       };
     }
   }
@@ -396,7 +424,10 @@ async function handleRasterRequest(
         y: match.request.y,
         format: match.format,
       };
-      image = await withRenderTimeout(renderRasterTile(rasterRequest));
+      image = await withRenderCapacity(renderRasterTile(rasterRequest), {
+        timeoutMs: config.tileDeliveryPolicy.renderTimeoutMs,
+        maxConcurrent: config.tileDeliveryPolicy.renderMaxConcurrent,
+      });
     } else {
       const staticRequest: StaticMapRequest = {
         styleId: match.styleId,
@@ -407,10 +438,13 @@ async function handleRasterRequest(
         height: match.request.height,
         format: match.format,
       };
-      image = await withRenderTimeout(renderStaticMap({
+      image = await withRenderCapacity(renderStaticMap({
         ...staticRequest,
         overlays: parseOverlays(input.query),
-      }));
+      }), {
+        timeoutMs: config.tileDeliveryPolicy.renderTimeoutMs,
+        maxConcurrent: config.tileDeliveryPolicy.renderMaxConcurrent,
+      });
     }
     const responseHeaders = buildHeaders(auth, image, cors, config.tileDeliveryPolicy.cacheTtlSeconds);
     if (input.method === "HEAD") {

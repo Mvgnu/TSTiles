@@ -8,6 +8,7 @@ const maxStaticDimension = 4096;
 const maxStaticZoom = 30;
 const maxRasterZoom = 30;
 const maxTileZoom = 30;
+const maxMercatorLatitude = 85.05112878;
 
 function isValidDecodedStyleId(rawSegment: string | undefined): boolean {
   if (rawSegment === undefined) {
@@ -81,7 +82,7 @@ export function isValidRequestPath(path: string): boolean {
     if (!Number.isFinite(lon) || !Number.isFinite(lat)) {
       return false;
     }
-    if (lon < -180 || lon > 180 || lat < -90 || lat > 90) {
+    if (lon < -180 || lon > 180 || lat < -maxMercatorLatitude || lat > maxMercatorLatitude) {
       return false;
     }
     if (!Number.isFinite(zoom) || zoom > maxStaticZoom) {

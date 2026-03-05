@@ -11,6 +11,7 @@ exports:
   - handleStaticMapRequest
 consumes:
   - access.authorizeTileRequest
+  - access.resolveAllowedOrigins
   - render.renderRasterTile
   - render.renderStaticMap
   - render.RenderErrorCode
@@ -46,10 +47,12 @@ Owns HTTP request handling for raster tiles and static images.
 - Uses `access` authorization and CORS decisions.
 - Quota checks run before render work begins.
 - Cache key excludes auth query params and includes style/version identity.
-- Static map coordinates enforce geographic bounds (`lon: -180..180`, `lat: -90..90`).
+- Static map coordinates enforce geographic bounds (`lon: -180..180`, `lat: -85.05112878..85.05112878`).
 - `HEAD` responses are only served when `HEAD_ENABLED=true`; if disabled, handlers return `405` with `HEAD_DISABLED`.
   `HEAD_DISABLED` responses for HEAD requests are body-less.
-- Render calls are timeout-bounded (`RENDER_TIMEOUT_MS`, default `15000`) and return `503` on timeout.
+- Render calls are timeout-bounded via `config.tileDeliveryPolicy.renderTimeoutMs` (from `RENDER_TIMEOUT_MS`, default `15000`) and return `503` on timeout.
+- Render calls enforce per-instance concurrency limits via `config.tileDeliveryPolicy.renderMaxConcurrent` (from `RENDER_MAX_CONCURRENT`, default `8`, `0` to hard-disable renders) and return `503` when saturated.
+- OPTIONS preflight requests remain auth-optional, but if a token is provided (e.g., query token) CORS policy is resolved project-scoped; otherwise global allowlist fallback is used.
 - Post-auth render/style failures preserve the resolved request CORS policy (including project-scoped origins) while returning `cache-control: no-store`.
 
 ## Error Taxonomy

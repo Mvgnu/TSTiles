@@ -21,8 +21,12 @@ const resetConfigEnv = (env: Readonly<Record<string, string | undefined>>): void
     RATE_LIMIT_MAX_REQUESTS_PER_MINUTE: "120",
     HEAD_ENABLED: "true",
     STORAGE_MAX_RANGE_BYTES: "5242880",
+    GLOBAL_REQUEST_BUDGET_PER_MINUTE: "0",
     CACHE_TTL_SECONDS: "300",
     METADATA_CACHE_TTL_SECONDS: "120",
+    RENDER_TIMEOUT_MS: "15000",
+    RENDER_MAX_CONCURRENT: "8",
+    RENDER_BACKEND: "local",
     OBSERVABILITY_ENABLED: "true",
     CACHE_WARN_THRESHOLD: "0.85",
     CACHE_CRITICAL_THRESHOLD: "0.7",
@@ -31,6 +35,7 @@ const resetConfigEnv = (env: Readonly<Record<string, string | undefined>>): void
     INGEST_SNAPSHOT_ID: "snapshot-latest",
     INGEST_SNAPSHOT_URL: "https://example.com/planet-latest.osm.pbf",
     INGEST_EXPECTED_CHECKSUM: undefined,
+    INGEST_MAX_SOURCE_BYTES: "10737418240",
   };
   const mergedEnv: Record<string, string | undefined> = {
     ...baseEnv,
@@ -53,17 +58,24 @@ test("configuration loading and redaction", () => {
   assert.equal(config.storage.mode, "memory");
   assert.equal(config.security.adminToken, "admin-token");
   assert.equal(config.tileDeliveryPolicy.headEnabled, true);
+  assert.equal(config.tileDeliveryPolicy.globalRequestBudgetPerMinute, 0);
+  assert.equal(config.tileDeliveryPolicy.renderTimeoutMs, 15000);
+  assert.equal(config.tileDeliveryPolicy.renderMaxConcurrent, 8);
+  assert.equal(config.tileDeliveryPolicy.renderBackend, "local");
   assert.equal(config.observability.enabled, true);
   assert.equal(config.ingestDefaults.snapshotId, "snapshot-latest");
+  assert.equal(config.ingestDefaults.maxSourceBytes, 10 * 1024 * 1024 * 1024);
 
   resetConfigEnv({
     INGEST_EXPECTED_CHECKSUM: "A".repeat(64),
     INGEST_SNAPSHOT_ID: "my-snapshot",
     STORAGE_MAX_RANGE_BYTES: "8192",
+    INGEST_MAX_SOURCE_BYTES: "2048",
   });
   const withOverrides = loadConfig();
   assert.equal(withOverrides.ingestDefaults.expectedChecksum, "a".repeat(64));
   assert.equal(withOverrides.ingestDefaults.snapshotId, "my-snapshot");
+  assert.equal(withOverrides.ingestDefaults.maxSourceBytes, 2048);
   assert.equal(withOverrides.tileDeliveryPolicy.maxRangeBytes, 8192);
 
   resetConfigEnv({
@@ -83,6 +95,17 @@ test("configuration loading and redaction", () => {
   try {
     loadConfig();
     assert.fail("expected invalid checksum shape to fail");
+  } catch (error: unknown) {
+    assert.ok(error instanceof ConfigError);
+    assert.equal((error as ConfigError).code, ConfigErrorCode.INVALID_VALUE);
+  }
+
+  resetConfigEnv({
+    INGEST_MAX_SOURCE_BYTES: "0",
+  });
+  try {
+    loadConfig();
+    assert.fail("expected non-positive INGEST_MAX_SOURCE_BYTES to fail");
   } catch (error: unknown) {
     assert.ok(error instanceof ConfigError);
     assert.equal((error as ConfigError).code, ConfigErrorCode.INVALID_VALUE);
@@ -198,6 +221,68 @@ test("configuration loading and redaction", () => {
     assert.ok(error instanceof ConfigError);
     assert.equal((error as ConfigError).code, ConfigErrorCode.INVALID_VALUE);
   }
+
+  resetConfigEnv({
+    GLOBAL_REQUEST_BUDGET_PER_MINUTE: "-1",
+  });
+  try {
+    loadConfig();
+    assert.fail("expected negative GLOBAL_REQUEST_BUDGET_PER_MINUTE to fail");
+  } catch (error: unknown) {
+    assert.ok(error instanceof ConfigError);
+    assert.equal((error as ConfigError).code, ConfigErrorCode.INVALID_VALUE);
+  }
+
+  resetConfigEnv({
+    GLOBAL_REQUEST_BUDGET_PER_MINUTE: "500",
+  });
+  const withGlobalBudget = loadConfig();
+  assert.equal(withGlobalBudget.tileDeliveryPolicy.globalRequestBudgetPerMinute, 500);
+
+  resetConfigEnv({
+    RENDER_BACKEND: "REMOTE",
+  });
+  const withRemoteRenderer = loadConfig();
+  assert.equal(withRemoteRenderer.tileDeliveryPolicy.renderBackend, "remote");
+
+  resetConfigEnv({
+    RENDER_BACKEND: "invalid-backend",
+  });
+  try {
+    loadConfig();
+    assert.fail("expected invalid RENDER_BACKEND to fail");
+  } catch (error: unknown) {
+    assert.ok(error instanceof ConfigError);
+    assert.equal((error as ConfigError).code, ConfigErrorCode.INVALID_VALUE);
+  }
+
+  resetConfigEnv({
+    RENDER_TIMEOUT_MS: "0",
+  });
+  try {
+    loadConfig();
+    assert.fail("expected non-positive RENDER_TIMEOUT_MS to fail");
+  } catch (error: unknown) {
+    assert.ok(error instanceof ConfigError);
+    assert.equal((error as ConfigError).code, ConfigErrorCode.INVALID_VALUE);
+  }
+
+  resetConfigEnv({
+    RENDER_MAX_CONCURRENT: "-1",
+  });
+  try {
+    loadConfig();
+    assert.fail("expected negative RENDER_MAX_CONCURRENT to fail");
+  } catch (error: unknown) {
+    assert.ok(error instanceof ConfigError);
+    assert.equal((error as ConfigError).code, ConfigErrorCode.INVALID_VALUE);
+  }
+
+  resetConfigEnv({
+    RENDER_MAX_CONCURRENT: "0",
+  });
+  const withRenderKillSwitch = loadConfig();
+  assert.equal(withRenderKillSwitch.tileDeliveryPolicy.renderMaxConcurrent, 0);
 
   resetConfigEnv({
     RATE_LIMIT_MAX_REQUESTS_PER_MINUTE: "120.5",

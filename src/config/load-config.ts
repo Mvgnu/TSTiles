@@ -39,6 +39,17 @@ function parsePositiveInteger(value: string | undefined, fallback: number, label
   return parsed;
 }
 
+function parseNonNegativeInteger(value: string | undefined, fallback: number, label: string): number {
+  if (value === undefined) {
+    return fallback;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 0) {
+    throw new ConfigError(ConfigErrorCode.INVALID_VALUE, `Invalid number for ${label}`, `${label}=${value}`);
+  }
+  return parsed;
+}
+
 function parseBoolean(value: string | undefined, fallback: boolean, label: string): boolean {
   if (value === undefined) {
     return fallback;
@@ -74,6 +85,20 @@ function parseOptionalSha256(value: string | undefined, label: string): string |
     throw new ConfigError(ConfigErrorCode.INVALID_VALUE, `${label} must be a 64-char sha256 hex digest`, `${label}=${value}`);
   }
   return lower;
+}
+
+function parseRenderBackend(value: string | undefined): "local" | "remote" {
+  if (value === undefined) {
+    return "local";
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized.length === 0) {
+    return "local";
+  }
+  if (normalized === "local" || normalized === "remote") {
+    return normalized;
+  }
+  throw new ConfigError(ConfigErrorCode.INVALID_VALUE, "Invalid render backend", `RENDER_BACKEND=${value}`);
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): RuntimeConfig {
@@ -127,12 +152,25 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       cacheTtlSeconds: parsePositiveInteger(env.CACHE_TTL_SECONDS, 300, "CACHE_TTL_SECONDS"),
       metadataCacheTtlSeconds: parsePositiveInteger(env.METADATA_CACHE_TTL_SECONDS, 120, "METADATA_CACHE_TTL_SECONDS"),
       headEnabled: parseBoolean(env.HEAD_ENABLED, true, "HEAD_ENABLED"),
+      globalRequestBudgetPerMinute: parseNonNegativeInteger(
+        env.GLOBAL_REQUEST_BUDGET_PER_MINUTE,
+        0,
+        "GLOBAL_REQUEST_BUDGET_PER_MINUTE",
+      ),
+      renderTimeoutMs: parsePositiveInteger(env.RENDER_TIMEOUT_MS, 15_000, "RENDER_TIMEOUT_MS"),
+      renderMaxConcurrent: parseNonNegativeInteger(env.RENDER_MAX_CONCURRENT, 8, "RENDER_MAX_CONCURRENT"),
+      renderBackend: parseRenderBackend(env.RENDER_BACKEND),
     },
     observability,
     ingestDefaults: {
       snapshotId: parseOptionalNonEmptyString(env.INGEST_SNAPSHOT_ID, "INGEST_SNAPSHOT_ID") ?? "snapshot-latest",
       snapshotSourceUrl: parseOptionalNonEmptyString(env.INGEST_SNAPSHOT_URL, "INGEST_SNAPSHOT_URL") ?? "https://example.com/planet-latest.osm.pbf",
       expectedChecksum: parseOptionalSha256(env.INGEST_EXPECTED_CHECKSUM, "INGEST_EXPECTED_CHECKSUM"),
+      maxSourceBytes: parsePositiveInteger(
+        env.INGEST_MAX_SOURCE_BYTES,
+        10 * 1024 * 1024 * 1024,
+        "INGEST_MAX_SOURCE_BYTES",
+      ),
     },
   };
 

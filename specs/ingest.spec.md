@@ -49,11 +49,13 @@ Owns download, verification, and conversion workflows from upstream OSM data to 
 
 - Ingest never mutates active artifact pointer directly.
 - Upload completes before completion event emission.
-- Duplicate runs are idempotent for the same source snapshot identifier.
+- Duplicate runs are idempotent for the same source snapshot identity (`snapshotId + sourceUrl + expectedChecksum`).
+- Source payload size is bounded by `INGEST_MAX_SOURCE_BYTES` before conversion/publish.
 
 ## Error Taxonomy
 
 - `INGEST_SOURCE_UNAVAILABLE`
+- `INGEST_SOURCE_TOO_LARGE`
 - `INGEST_CHECKSUM_FAILED`
 - `INGEST_CONVERSION_FAILED`
 - `INGEST_PUBLISH_FAILED`

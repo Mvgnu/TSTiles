@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert";
 import { classifySLOBreach, evaluateTileSLOs } from "../observability.service";
 import { ObservabilityError, ObservabilityErrorCode } from "../types";
 import { CONTRACT_SCHEMA_VERSION } from "../../../contracts/types";
+import { setAlertDispatchFailureMode } from "../analytics/alerts";
 
 type TestFunction = (name: string, fn: () => void | Promise<void>) => void;
 const test: TestFunction = ((globalThis as { test?: TestFunction }).test ?? ((_, fn) => {
@@ -310,7 +311,7 @@ assert.equal(equalThresholdFailed, true);
 process.env.CACHE_WARN_THRESHOLD = "0.9";
 process.env.CACHE_CRITICAL_THRESHOLD = "0.7";
 process.env.OBSERVABILITY_ENABLED = "true";
-process.env.OBS_ALERT_FORCE_FAIL = "true";
+setAlertDispatchFailureMode(true);
 const alertDispatchFailureSuppressed = evaluateTileSLOs({
   schemaVersion: 1,
   artifactVersion: "artifact-alert-fail",
@@ -341,7 +342,7 @@ const alertFailureSuppressedWhenDisabled = evaluateTileSLOs({
 assert.equal(alertFailureSuppressedWhenDisabled.artifactVersion, "artifact-alert-disabled");
 
 process.env.OBSERVABILITY_ENABLED = "true";
-delete process.env.OBS_ALERT_FORCE_FAIL;
+setAlertDispatchFailureMode(false);
 });
 
 test("observability clamps stale timestamps into bounded windows", () => {

@@ -13,6 +13,7 @@ import {
 } from "./types";
 import { renderLocally } from "./adapters/local-native-renderer";
 import { renderWithRemoteService } from "./adapters/remote-renderer-client";
+import { loadConfig } from "../../config/load-config";
 
 interface ResolvedStyle {
   readonly versionKey: string;
@@ -36,6 +37,8 @@ interface SourceCoordinates {
   readonly sourceX: number;
   readonly sourceY: number;
 }
+
+const maxMercatorLatitude = 85.05112878;
 
 function formatForImage(format: RenderFormat): string {
   if (format === "webp") {
@@ -95,11 +98,11 @@ function assertNonNegativeFinite(value: unknown, label: string): number {
 }
 
 function clampLatitude(lat: number): number {
-  if (lat > 85.05112878) {
-    return 85.05112878;
+  if (lat > maxMercatorLatitude) {
+    return maxMercatorLatitude;
   }
-  if (lat < -85.05112878) {
-    return -85.05112878;
+  if (lat < -maxMercatorLatitude) {
+    return -maxMercatorLatitude;
   }
   return lat;
 }
@@ -194,7 +197,8 @@ async function resolveStyle(styleId: string, versionId?: string): Promise<Resolv
 }
 
 function selectRenderer() {
-  const backend = process.env.RENDER_BACKEND;
+  const config = loadConfig();
+  const backend = config.tileDeliveryPolicy.renderBackend;
   if (backend === "remote") {
     return renderWithRemoteService;
   }
@@ -236,6 +240,12 @@ function parseStaticMapSource(
   }
   const lon = parseStaticCoordinate(input.lon, "lon");
   const lat = parseStaticCoordinate(input.lat, "lat");
+  if (lon < -180 || lon > 180) {
+    throwRenderError(RenderErrorCode.BAD_REQUEST, "lon");
+  }
+  if (lat < -maxMercatorLatitude || lat > maxMercatorLatitude) {
+    throwRenderError(RenderErrorCode.BAD_REQUEST, "lat");
+  }
   const tile = tileFromLatLon(lon, lat, Math.floor(normalizedZoom));
   return {
     styleVersionId: input.versionId,

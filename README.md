@@ -16,6 +16,7 @@ A domain-first TypeScript tileserver scaffold that ships:
 - `/src/domains/*` – one domain per responsibility (`tile_api`, `raster_api`, `styles`, `render`, `access`, etc.).
 - `/specs/*.spec.md` – authoritative domain specs with exports/consumes and verification commands.
 - `/specs/README.md` – domain catalog + dependency graph.
+- `/specs/release_readiness.md` – exit criteria tracker + current stop-point for release push.
 
 ## Runtime requirements
 
@@ -44,12 +45,17 @@ Optional runtime tuning:
 - `ENABLE_RATE_LIMIT` (default `true`)
 - `RATE_LIMIT_MAX_REQUESTS_PER_MINUTE` (default `120`)
 - `STORAGE_MAX_RANGE_BYTES`
+- `GLOBAL_REQUEST_BUDGET_PER_MINUTE` (default `0`, disabled; caps total accepted metered requests per minute)
 - `CACHE_TTL_SECONDS`
 - `METADATA_CACHE_TTL_SECONDS`
 - `HEAD_ENABLED`
+- `RENDER_TIMEOUT_MS` (default `15000`)
+- `RENDER_MAX_CONCURRENT` (default `8`, `0` disables render work)
+- `RENDER_BACKEND` (`local` or `remote`, default `local`)
 - `INGEST_SNAPSHOT_ID`
 - `INGEST_SNAPSHOT_URL`
 - `INGEST_EXPECTED_CHECKSUM`
+- `INGEST_MAX_SOURCE_BYTES` (default `10737418240`, 10 GiB)
 - Observability: `CACHE_WARN_THRESHOLD`, `CACHE_CRITICAL_THRESHOLD`, `ERROR_WARN_THRESHOLD`, `ERROR_CRITICAL_THRESHOLD`, `OBSERVABILITY_ENABLED`
 
 ## Public API contract (spec-aligned)
@@ -131,6 +137,7 @@ Current implementation status is tracked in domain specs (`status: ready` on all
 
 - `npm run typecheck`
 - `npm run test:domains`
+- `npm run smoke:e2e` (against a running server; defaults to `http://127.0.0.1:8787`)
 - Optional health smoke:
   - `/v1/health` (liveness)
   - `/docs` (public docs payload)
@@ -143,6 +150,20 @@ Run these from project root:
 - `npm install`
 - `npm run typecheck` (must pass before any release)
 - `npm run test:domains` (alias for domain test matrix)
+- `npm run test:integration:s3` (opt-in MinIO/S3-compatible adapter integration)
+- `npm run readiness:check` (lint + typecheck + domain tests + build + smoke)
+
+CI (`.github/workflows/ci.yml`) enforces:
+- `lint`
+- `typecheck`
+- `test:domains`
+- `smoke:e2e` against a built local demo server
+
+S3-compatible integration CI:
+- `.github/workflows/s3-integration.yml` runs MinIO-backed storage integration tests.
+
+Post-deploy smoke automation:
+- `.github/workflows/vps-smoke.yml` runs `smoke:e2e` against a provided deployed `BASE_URL` using `TILESERVER_SMOKE_TOKEN`.
 
 Optional deep checks:
 
@@ -153,7 +174,7 @@ Optional deep checks:
 
 This repo now includes a runnable local HTTP server that composes all domain routes end to end and exposes a browser demo at `/demo`.
 
-1. Download (or continue downloading) the PMTiles file to your external drive:
+1. Download (or continue downloading) the PMTiles file to your drive:
 
    - `mkdir -p /Volumes/ExtSSD/tileserver-data`
    - `curl -L --continue-at - --output /Volumes/ExtSSD/tileserver-data/20260228.pmtiles https://build.protomaps.com/20260228.pmtiles`

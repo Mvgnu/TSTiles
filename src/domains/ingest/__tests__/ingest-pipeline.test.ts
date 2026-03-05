@@ -7,6 +7,7 @@ import { emitIngestCompleted, runIngestPipeline } from "../ingest.service";
 process.env.ADMIN_TOKEN = "admin-token";
 process.env.OBJECT_STORE_BUCKET = "ingest-pipeline-bucket";
 process.env.NODE_ENV = "development";
+process.env.INGEST_MAX_SOURCE_BYTES = "1048576";
 
 const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
 
@@ -58,6 +59,12 @@ test("ingest pipeline runs and emits completion events", async (): Promise<void>
   const second = await runIngestPipeline(cachedSnapshot);
   assert.equal(first.artifactId, second.artifactId);
   assert.equal(first.startedAt, second.startedAt);
+  const changedSource = await runIngestPipeline({
+    snapshotId: cachedSnapshot.snapshotId,
+    sourceUrl: "data:text/plain,cache-check-updated",
+    expectedChecksum: sha256("cache-check-updated"),
+  });
+  assert.equal(changedSource.artifactId === first.artifactId, false);
 
   const base64Snapshot = {
     snapshotId: "snapshot-base64",
@@ -94,6 +101,25 @@ test("ingest pipeline runs and emits completion events", async (): Promise<void>
     },
     IngestErrorCode.SOURCE_UNAVAILABLE,
   );
+
+  const previousMaxSourceBytes = process.env.INGEST_MAX_SOURCE_BYTES;
+  process.env.INGEST_MAX_SOURCE_BYTES = "8";
+  try {
+    await assertIngestError(
+      {
+        snapshotId: "snapshot-too-large",
+        sourceUrl: "data:text/plain,123456789",
+        expectedChecksum: undefined,
+      },
+      IngestErrorCode.SOURCE_TOO_LARGE,
+    );
+  } finally {
+    if (previousMaxSourceBytes === undefined) {
+      Reflect.deleteProperty(process.env, "INGEST_MAX_SOURCE_BYTES");
+    } else {
+      process.env.INGEST_MAX_SOURCE_BYTES = previousMaxSourceBytes;
+    }
+  }
 
   const originalFetch = globalThis.fetch;
   (globalThis as { fetch?: typeof fetch }).fetch = async () => {

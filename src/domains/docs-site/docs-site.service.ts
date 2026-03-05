@@ -359,7 +359,7 @@ const quickstartExamples = {
   vector: [
     {
       name: "Fetch a vector tile",
-      description: "Replace path parameters and access token before sending.",
+      description: "Replace path parameters and access token before sending. Browser clients should prefer query-token auth for CORS preflight compatibility.",
       url: "/v1/tiles/2/2/3.mvt?access_token=YOUR_TOKEN",
     },
     {
@@ -426,17 +426,17 @@ export function getDocsIndex(): DocsIndex {
       {
         id: "quickstart",
         title: "Quickstart",
-        body: "Use project access tokens via `Authorization: Bearer YOUR_TOKEN` or `?access_token=YOUR_TOKEN`.",
+        body: "Use project access tokens via `Authorization: Bearer YOUR_TOKEN` or `?access_token=YOUR_TOKEN`; browser clients should prefer query-token auth to keep CORS preflight project-scoped.",
       },
       {
         id: "auth",
         title: "Authentication",
-        body: "Project-scoped tokens are required for private requests. Use `Authorization: Bearer YOUR_TOKEN` or `?access_token=YOUR_TOKEN`.",
+        body: "Project-scoped tokens are required for private requests. Use `Authorization: Bearer YOUR_TOKEN` for server-to-server requests and `?access_token=YOUR_TOKEN` for browser map clients.",
       },
       {
         id: "examples",
         title: "Examples",
-        body: "Use `access_token` query parameter or `Authorization: Bearer` header with all protected endpoints.",
+        body: "Examples include both auth patterns; for browser preflight flows use `access_token` query parameter URLs.",
       },
       {
         id: "limits",

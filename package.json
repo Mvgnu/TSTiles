@@ -8,7 +8,10 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run test:domains",
     "test:domains": "vitest run src/domains --globals --passWithNoTests",
+    "test:integration:s3": "RUN_S3_COMPAT_INTEGRATION=1 vitest run src/domains/storage/__tests__/storage-s3-compatible.integration.test.ts --globals --passWithNoTests",
     "demo:start": "npm run build && node dist/app/demo-server.js",
+    "smoke:e2e": "bash scripts/smoke-e2e.sh",
+    "readiness:check": "bash scripts/readiness-check.sh",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
   },
@@ -20,5 +23,8 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.56.1",
     "vitest": "^4.0.18"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1002.0"
   }
 }

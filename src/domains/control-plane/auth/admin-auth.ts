@@ -1,18 +1,23 @@
 import { loadConfig } from "../../../config/load-config";
 
-export function isAuthorized(adminToken?: string): boolean {
-  const config = loadConfig();
+export function normalizeAdminToken(adminToken: string | undefined): string | undefined {
   if (!adminToken) {
-    return false;
+    return undefined;
   }
   const trimmed = adminToken.trim();
   if (trimmed.length === 0) {
-    return false;
+    return undefined;
   }
   const normalized = trimmed.toLowerCase().startsWith("bearer ")
     ? trimmed.slice(7).trim()
     : trimmed;
-  if (normalized.length === 0) {
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+export function isAuthorized(adminToken?: string): boolean {
+  const config = loadConfig();
+  const normalized = normalizeAdminToken(adminToken);
+  if (!normalized) {
     return false;
   }
   return normalized === config.security.adminToken;

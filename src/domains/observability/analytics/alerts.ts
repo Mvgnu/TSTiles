@@ -5,11 +5,17 @@ export interface AlertDispatchResult {
   readonly reason: string;
 }
 
+let forceAlertDispatchFailure = false;
+
+export function setAlertDispatchFailureMode(forceFailure: boolean): void {
+  forceAlertDispatchFailure = forceFailure;
+}
+
 export function dispatchAlert(signal: CacheHealthSignal, active: boolean): AlertDispatchResult {
   if (!active) {
     return { sent: false, reason: "observability disabled" };
   }
-  if (process.env.OBS_ALERT_FORCE_FAIL === "true") {
+  if (forceAlertDispatchFailure) {
     throw new ObservabilityError(
       ObservabilityErrorCode.ALERT_DISPATCH_FAILED,
       "Failed to dispatch observability alert",

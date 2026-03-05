@@ -1,4 +1,5 @@
 import type { DeliverySignal } from "../../contracts/types";
+import { loadConfig } from "../../config/load-config";
 import { getProjectPolicy } from "../projects/projects.service";
 import type { ProjectPolicy } from "../projects/types";
 import {
@@ -30,6 +31,7 @@ const billingPlansById: ReadonlyMap<string, BillingPlan> = new Map<string, Billi
 ]);
 
 const usageBuckets = new Map<string, number>();
+const globalMinuteBudgetBuckets = new Map<string, number>();
 const deliverySignalBuffer: DeliverySignal[] = [];
 const maxDeliverySignalBuffer = 500;
 const cleanupIntervalRequests = 256;
@@ -188,6 +190,16 @@ function cleanupUsageBuckets(now = new Date(Date.now())): void {
       usageBuckets.delete(key);
     }
   }
+
+  for (const key of globalMinuteBudgetBuckets.keys()) {
+    if (!isSafeCounterToken(key)) {
+      globalMinuteBudgetBuckets.delete(key);
+      continue;
+    }
+    if (key < minuteCutoff) {
+      globalMinuteBudgetBuckets.delete(key);
+    }
+  }
 }
 
 function maybeCleanupUsageBuckets(now = new Date(Date.now())): void {
@@ -308,7 +320,13 @@ export function consumeRequestUnit(identity: ProjectUsageIdentity | null, endpoi
   const minuteLimit = parseSafePositiveInt(policy.quotas?.minuteRequests);
   const dailyLimit = parseSafePositiveInt(policy.quotas?.dailyRequests);
   const monthlyLimit = parseSafePositiveInt(policy.quotas?.monthlyRequests);
+  const runtimeConfig = loadConfig();
+  const globalMinuteBudgetLimit = parseSafePositiveInt(
+    runtimeConfig.tileDeliveryPolicy.globalRequestBudgetPerMinute,
+  );
   const now = new Date(Date.now());
+  const globalMinuteBudgetKey = bucketWindow("minute", now);
+  const currentGlobalMinuteBudget = globalMinuteBudgetBuckets.get(globalMinuteBudgetKey) ?? 0;
   const minuteKey = counterKey(
     identity.projectId,
     identity.keyHash,
@@ -358,6 +376,24 @@ export function consumeRequestUnit(identity: ProjectUsageIdentity | null, endpoi
     current: currentMonth,
     next: currentMonth + 1,
   };
+  const globalMinuteState: WindowCounterState = {
+    window: "minute",
+    key: globalMinuteBudgetKey,
+    limit: globalMinuteBudgetLimit,
+    current: currentGlobalMinuteBudget,
+    next: currentGlobalMinuteBudget + 1,
+  };
+
+  if (globalMinuteState.limit !== undefined) {
+    if (globalMinuteState.current >= globalMinuteState.limit) {
+      return {
+        allow: false,
+        denyReason: "rate_limit",
+        remaining: 0,
+        limit: globalMinuteState.limit,
+      };
+    }
+  }
 
   if (minuteState.limit !== undefined) {
     if (minuteState.current >= minuteState.limit) {
@@ -394,8 +430,9 @@ export function consumeRequestUnit(identity: ProjectUsageIdentity | null, endpoi
   usageBuckets.set(minuteState.key, minuteState.next);
   usageBuckets.set(dayState.key, dayState.next);
   usageBuckets.set(monthState.key, monthState.next);
+  globalMinuteBudgetBuckets.set(globalMinuteState.key, globalMinuteState.next);
 
-  const primary = selectPrimaryLimit([minuteState, dayState, monthState]);
+  const primary = selectPrimaryLimit([globalMinuteState, minuteState, dayState, monthState]);
 
   return {
     allow: true,

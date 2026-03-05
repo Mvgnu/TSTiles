@@ -23,17 +23,25 @@ function normalizeSnapshotId(snapshotId: string): string {
   return normalized.toLowerCase();
 }
 
+function buildRunCacheKey(snapshotId: string, snapshot: PlanetSnapshot): string {
+  const normalizedSourceUrl = snapshot.sourceUrl.trim();
+  const normalizedChecksum = snapshot.expectedChecksum?.trim().toLowerCase() ?? "";
+  return `${snapshotId}|${normalizedSourceUrl}|${normalizedChecksum}`;
+}
+
 export async function runIngestPipeline(snapshot: PlanetSnapshot): Promise<IngestRunReport> {
   const snapshotId = normalizeSnapshotId(snapshot.snapshotId);
+  const cacheKey = buildRunCacheKey(snapshotId, snapshot);
   return withIngestLock(snapshotId, async () => {
-    const cached = runCache.get(snapshotId);
+    const cached = runCache.get(cacheKey);
     if (cached) {
       return cached;
     }
 
+    const config = loadConfig();
     const startedAtMs = Date.now();
     const startedAt = new Date().toISOString();
-    const raw = await fetchPlanet(snapshot);
+    const raw = await fetchPlanet(snapshot, config.ingestDefaults.maxSourceBytes);
     const checksumResult = verifyChecksum(raw, snapshot.expectedChecksum);
     const converted = await convertToPmTiles(snapshotId, raw);
     const probe = probeOutput(converted.bytes);
@@ -60,7 +68,7 @@ export async function runIngestPipeline(snapshot: PlanetSnapshot): Promise<Inges
       validationSummary: `sourceBytes=${raw.byteLength}; convertedBytes=${converted.bytes.byteLength}`,
     };
     // Ingestion side effects (artifact registration) are handled by control-plane orchestration.
-    runCache.set(snapshotId, report);
+    runCache.set(cacheKey, report);
     while (runCache.size > maxRunCacheEntries) {
       const oldest = runCache.keys().next();
       if (oldest.done) {

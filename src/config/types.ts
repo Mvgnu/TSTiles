@@ -22,6 +22,10 @@ export interface TileDeliveryPolicy {
   readonly cacheTtlSeconds: number;
   readonly metadataCacheTtlSeconds: number;
   readonly headEnabled: boolean;
+  readonly globalRequestBudgetPerMinute: number;
+  readonly renderTimeoutMs: number;
+  readonly renderMaxConcurrent: number;
+  readonly renderBackend: "local" | "remote";
 }
 
 export interface ObservabilityConfig {
@@ -36,6 +40,7 @@ export interface IngestDefaults {
   readonly snapshotId: string;
   readonly snapshotSourceUrl: string;
   readonly expectedChecksum?: string;
+  readonly maxSourceBytes: number;
 }
 
 export interface RuntimeConfig {
