@@ -11,9 +11,7 @@ import {
   type RenderFormat,
   type StaticMapRequest,
 } from "./types";
-import { renderLocally } from "./adapters/local-native-renderer";
-import { renderWithRemoteService } from "./adapters/remote-renderer-client";
-import { loadConfig } from "../../config/load-config";
+import { renderLocally, RenderBackendUnavailableError } from "./adapters/local-native-renderer";
 
 interface ResolvedStyle {
   readonly versionKey: string;
@@ -30,6 +28,12 @@ interface TileRequestInput {
   readonly sourceZ?: number;
   readonly sourceX?: number;
   readonly sourceY?: number;
+  // Cartographic viewport for the native renderer. When `viewLon`/`viewLat`/
+  // `viewZoom` are set, the maplibre-native binding uses them as the static
+  // map center; otherwise it derives a viewport from `sourceZ/X/Y`.
+  readonly viewLon?: number;
+  readonly viewLat?: number;
+  readonly viewZoom?: number;
 }
 
 interface SourceCoordinates {
@@ -39,6 +43,10 @@ interface SourceCoordinates {
 }
 
 const maxMercatorLatitude = 85.05112878;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
 
 function formatForImage(format: RenderFormat): string {
   if (format === "webp") {
@@ -71,20 +79,44 @@ function assertRasterCoordinates(z: number, x: number, y: number): void {
   }
 }
 
-function normalizeRequiredIdentifier(value: string, label: string): string {
+function assertRasterCoordinateInteger(value: unknown, label: string): asserts value is number {
+  if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+    throwRenderError(RenderErrorCode.BAD_REQUEST, label);
+  }
+}
+
+function normalizeRequiredIdentifier(value: unknown, label: string): string {
+  if (typeof value !== "string") {
+    throwRenderError(RenderErrorCode.BAD_REQUEST, label);
+  }
   const trimmed = value.trim();
-  if (trimmed.length === 0) {
+  if (
+    trimmed.length === 0
+    || trimmed === "."
+    || trimmed.includes("/")
+    || trimmed.includes("\\")
+    || trimmed.includes("..")
+  ) {
     throwRenderError(RenderErrorCode.BAD_REQUEST, label);
   }
   return trimmed;
 }
 
-function normalizeOptionalIdentifier(value: string | undefined, label: string): string | undefined {
+function normalizeOptionalIdentifier(value: unknown, label: string): string | undefined {
   if (value === undefined) {
     return undefined;
   }
+  if (typeof value !== "string") {
+    throwRenderError(RenderErrorCode.BAD_REQUEST, label);
+  }
   const trimmed = value.trim();
-  if (trimmed.length === 0) {
+  if (
+    trimmed.length === 0
+    || trimmed === "."
+    || trimmed.includes("/")
+    || trimmed.includes("\\")
+    || trimmed.includes("..")
+  ) {
     throwRenderError(RenderErrorCode.BAD_REQUEST, label);
   }
   return trimmed;
@@ -108,8 +140,19 @@ function clampLatitude(lat: number): number {
 }
 
 function normalizeOverlays(overlays: ReadonlyArray<string> | undefined): string[] {
-  if (overlays === undefined || overlays.length === 0) {
+  if (overlays === undefined) {
     return [];
+  }
+  if (!Array.isArray(overlays)) {
+    throwRenderError(RenderErrorCode.BAD_REQUEST, "overlays");
+  }
+  if (overlays.length === 0) {
+    return [];
+  }
+  for (const entry of overlays) {
+    if (typeof entry !== "string") {
+      throwRenderError(RenderErrorCode.BAD_REQUEST, "overlays");
+    }
   }
   const filtered = overlays
     .map((entry) => entry.trim())
@@ -176,7 +219,7 @@ function messageCode(value: unknown): string | undefined {
 
 async function resolveStyle(styleId: string, versionId?: string): Promise<ResolvedStyle> {
   try {
-    const document = getStyle(styleId, versionId);
+    const document = await getStyle(styleId, versionId);
     return {
       versionKey: buildStyleVersionKey(document),
     };
@@ -196,19 +239,10 @@ async function resolveStyle(styleId: string, versionId?: string): Promise<Resolv
   }
 }
 
-function selectRenderer() {
-  const config = loadConfig();
-  const backend = config.tileDeliveryPolicy.renderBackend;
-  if (backend === "remote") {
-    return renderWithRemoteService;
-  }
-  return renderLocally;
-}
-
 function parseRasterTileSource(input: RasterTileRequest): SourceCoordinates & { readonly styleVersionId?: string } {
-  assertInteger(input.z, "z");
-  assertInteger(input.x, "x");
-  assertInteger(input.y, "y");
+  assertRasterCoordinateInteger(input.z, "z");
+  assertRasterCoordinateInteger(input.x, "x");
+  assertRasterCoordinateInteger(input.y, "y");
   assertRasterCoordinates(input.z, input.x, input.y);
   return {
     styleVersionId: input.versionId,
@@ -226,6 +260,8 @@ function parseStaticMapSource(
   readonly height: number;
   readonly overlays?: ReadonlyArray<string>;
 } {
+  assertInteger(input.width, "width");
+  assertInteger(input.height, "height");
   if (input.width < 1 || input.height < 1) {
     throwRenderError(RenderErrorCode.BAD_REQUEST, "width");
   }
@@ -247,6 +283,7 @@ function parseStaticMapSource(
     throwRenderError(RenderErrorCode.BAD_REQUEST, "lat");
   }
   const tile = tileFromLatLon(lon, lat, Math.floor(normalizedZoom));
+  const overlays = normalizeOverlays(input.overlays);
   return {
     styleVersionId: input.versionId,
     sourceZ: tile.z,
@@ -254,7 +291,7 @@ function parseStaticMapSource(
     sourceY: tile.y,
     width: input.width,
     height: input.height,
-    overlays: input.overlays,
+    overlays,
   };
 }
 
@@ -285,25 +322,38 @@ async function renderFromSource(input: TileRequestInput): Promise<RenderedImage>
     }
     throwRenderError(RenderErrorCode.BACKEND_UNAVAILABLE, "resolver");
   }
-  const renderer = selectRenderer();
+  const normalizedOverlays = normalizeOverlays(input.overlays);
   try {
-    const rendered = await renderer({
+    const rendered = await renderLocally({
       styleId: input.styleId,
       styleVersionKey: style.versionKey,
+      styleVersionId: input.styleVersionId,
       artifactId: resolvedTile.artifactId,
       sourcePath: input.sourcePath,
       format: input.format,
       width: input.width,
       height: input.height,
+      overlays: normalizedOverlays,
+      tileZ: input.sourceZ,
+      tileX: input.sourceX,
+      tileY: input.sourceY,
+      viewLon: input.viewLon,
+      viewLat: input.viewLat,
+      viewZoom: input.viewZoom,
     });
     const cacheKey = buildCacheKey({
       ...input,
       artifactId: resolvedTile.artifactId,
       styleVersionKey: style.versionKey,
+      overlays: normalizedOverlays,
     });
     return {
       bytes: rendered.bytes,
-      contentType: formatForImage(input.format),
+      // Honor the adapter's actual encoded content-type instead of trusting
+      // the requested format. The minimal pure-JS encoder only emits PNG, so
+      // WebP requests transparently degrade to PNG with image/png reported
+      // back to the caller.
+      contentType: rendered.contentType ?? formatForImage(input.format),
       cacheKey,
       styleId: input.styleId,
       styleVersionKey: style.versionKey,
@@ -315,6 +365,13 @@ async function renderFromSource(input: TileRequestInput): Promise<RenderedImage>
     if (isRenderError(error)) {
       throw error;
     }
+    if (error instanceof RenderBackendUnavailableError) {
+      // Native maplibre binding unavailable in this process. Surface as a
+      // proper backend-unavailable error (mapped to 503 by raster-api) so
+      // operators see the issue immediately instead of silently degraded
+      // pretend-rendered output.
+      throwRenderError(RenderErrorCode.BACKEND_UNAVAILABLE, "renderer");
+    }
     const code = messageCode(error);
     if (code === "RENDER_BAD_REQUEST") {
       throwRenderError(RenderErrorCode.BAD_REQUEST);
@@ -324,6 +381,9 @@ async function renderFromSource(input: TileRequestInput): Promise<RenderedImage>
 }
 
 export async function renderRasterTile(input: RasterTileRequest): Promise<RenderedImage> {
+  if (!isRecord(input)) {
+    throwRenderError(RenderErrorCode.BAD_REQUEST, "request");
+  }
   if (input.format !== "png" && input.format !== "webp") {
     throwRenderError(RenderErrorCode.BAD_REQUEST, "format");
   }
@@ -342,6 +402,9 @@ export async function renderRasterTile(input: RasterTileRequest): Promise<Render
 }
 
 export async function renderStaticMap(input: StaticMapRequest): Promise<RenderedImage> {
+  if (!isRecord(input)) {
+    throwRenderError(RenderErrorCode.BAD_REQUEST, "request");
+  }
   if (input.format !== "png" && input.format !== "webp") {
     throwRenderError(RenderErrorCode.BAD_REQUEST, "format");
   }
@@ -359,5 +422,8 @@ export async function renderStaticMap(input: StaticMapRequest): Promise<Rendered
     width: metadata.width,
     height: metadata.height,
     overlays: metadata.overlays,
+    viewLon: input.lon,
+    viewLat: input.lat,
+    viewZoom: input.zoom,
   });
 }

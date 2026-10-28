@@ -8,7 +8,7 @@ import {
 } from "./response";
 
 export async function adminIngestRoute(token: string): Promise<AdminRouteResponse> {
-  if (!isAuthorized(token)) {
+  if (!(await isAuthorized(token))) {
     return unauthorizedAdminResponse();
   }
   try {

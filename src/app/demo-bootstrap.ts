@@ -4,6 +4,7 @@ import { basename, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "../config/load-config";
+import { DEVELOPMENT_ONLY_SECURITY_DEFAULTS } from "../config/security-secrets";
 import { listArtifacts, promoteArtifact, registerArtifact } from "../domains/artifact/artifact.service";
 import { createObjectStore } from "../domains/storage/storage.service";
 import type { ObjectStore } from "../domains/storage/types";
@@ -15,7 +16,10 @@ import {
 } from "../domains/styles/styles.service";
 import type { StyleInput } from "../domains/styles/types";
 
-const defaultPmtilesPath = "/Volumes/ExtSSD/tileserver-data/20260228.pmtiles";
+const defaultPmtilesPath = resolve(
+  __dirname,
+  "../../src/domains/tile-resolver/__fixtures__/test_fixture_1.pmtiles",
+);
 const defaultStyleFiles = [
   "assets/styles/seed/style.json",
   "assets/styles/seed/style-dark.json",
@@ -49,6 +53,7 @@ export interface DemoBootstrapState {
   readonly artifactId: string;
   readonly artifactKey: string;
   readonly artifactByteSize: number;
+  readonly artifactAvailable: boolean;
   readonly styleIds: ReadonlyArray<string>;
   readonly accessToken: string;
   readonly adminToken: string;
@@ -64,14 +69,20 @@ function ensureRuntimeEnvDefaults(): void {
   if (!process.env.NODE_ENV || process.env.NODE_ENV.trim().length === 0) {
     process.env.NODE_ENV = "development";
   }
+  if (!isDevelopmentEnvironment()) {
+    return;
+  }
   if (!process.env.OBJECT_STORE_MODE || process.env.OBJECT_STORE_MODE.trim().length === 0) {
-    process.env.OBJECT_STORE_MODE = isDevelopmentEnvironment() ? "memory" : "s3-compatible";
+    process.env.OBJECT_STORE_MODE = "memory";
   }
   if (!process.env.OBJECT_STORE_BUCKET || process.env.OBJECT_STORE_BUCKET.trim().length === 0) {
     process.env.OBJECT_STORE_BUCKET = "tileserver-demo";
   }
-  if (!process.env.ADMIN_TOKEN || process.env.ADMIN_TOKEN.trim().length === 0) {
-    process.env.ADMIN_TOKEN = "demo-admin-token";
+  if (
+    (!process.env.ADMIN_API_TOKEN || process.env.ADMIN_API_TOKEN.trim().length === 0) &&
+    (!process.env.ADMIN_TOKEN || process.env.ADMIN_TOKEN.trim().length === 0)
+  ) {
+    process.env.ADMIN_TOKEN = DEVELOPMENT_ONLY_SECURITY_DEFAULTS.adminToken;
   }
   if (!process.env.ALLOWED_TILES_TOKENS || process.env.ALLOWED_TILES_TOKENS.trim().length === 0) {
     process.env.ALLOWED_TILES_TOKENS = "demo-public-token";
@@ -120,15 +131,24 @@ function resolvePmtilesSource(): ResolvedPmtilesSource {
   }
 
   const configuredLocalPath = process.env.DEMO_PMTILES_PATH?.trim();
-  if (!isDevelopmentEnvironment()) {
-    throw new Error("DEMO_PMTILES_KEY is required outside development");
+  if (configuredLocalPath && configuredLocalPath.length > 0) {
+    const resolvedPath = resolve(configuredLocalPath);
+    return {
+      artifactKey: pathToFileURL(resolvedPath).toString(),
+      artifactLabel: normalizeArtifactLabel(resolvedPath),
+      location: resolvedPath,
+      localPath: resolvedPath,
+    };
   }
-  const resolvedPath = resolve(configuredLocalPath && configuredLocalPath.length > 0 ? configuredLocalPath : defaultPmtilesPath);
+
+  if (!isDevelopmentEnvironment()) {
+    throw new Error("DEMO_PMTILES_PATH or DEMO_PMTILES_KEY is required outside development");
+  }
   return {
-    artifactKey: pathToFileURL(resolvedPath).toString(),
-    artifactLabel: normalizeArtifactLabel(resolvedPath),
-    location: resolvedPath,
-    localPath: resolvedPath,
+    artifactKey: pathToFileURL(defaultPmtilesPath).toString(),
+    artifactLabel: normalizeArtifactLabel(defaultPmtilesPath),
+    location: defaultPmtilesPath,
+    localPath: defaultPmtilesPath,
   };
 }
 
@@ -187,6 +207,7 @@ function normalizeExternalStyleDocument(input: unknown): StyleInput {
     sprites: spriteTemplate,
     glyphs: glyphTemplate,
   };
+  delete normalized.sprite;
   const sourceInput = input.sources;
   if (!isObjectRecord(sourceInput)) {
     normalized.sources = {
@@ -211,12 +232,12 @@ function normalizeExternalStyleDocument(input: unknown): StyleInput {
   return normalized;
 }
 
-function registerParsedStyle(styleIdentifier: string, parsed: unknown): string | null {
+async function registerParsedStyle(styleIdentifier: string, parsed: unknown): Promise<string | null> {
   const styleId = normalizeStyleIdFromIdentifier(styleIdentifier);
   try {
     const style = normalizeExternalStyleDocument(parsed);
-    const version = createStyleVersion(styleId, style);
-    publishStyleVersion(styleId, version.id);
+    const version = await createStyleVersion(styleId, style);
+    await publishStyleVersion(styleId, version.id);
     return styleId;
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unknown style import error";
@@ -235,7 +256,7 @@ async function importStyleFromFile(stylePath: string): Promise<string | null> {
     console.warn(`Skipping style file ${stylePath}: ${reason}`);
     return null;
   }
-  return registerParsedStyle(stylePath, parsed);
+  return await registerParsedStyle(stylePath, parsed);
 }
 
 async function readObjectAsUtf8(store: ObjectStore, key: string): Promise<string> {
@@ -255,7 +276,7 @@ async function importStyleFromObjectKey(store: ObjectStore, key: string): Promis
   try {
     const content = await readObjectAsUtf8(store, key);
     const parsed = JSON.parse(content) as unknown;
-    return registerParsedStyle(key, parsed);
+    return await registerParsedStyle(key, parsed);
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unknown parse error";
     console.warn(`Skipping style key ${key}: ${reason}`);
@@ -263,10 +284,10 @@ async function importStyleFromObjectKey(store: ObjectStore, key: string): Promis
   }
 }
 
-function defaultStyleFallback(): string {
+async function defaultStyleFallback(): Promise<string> {
   const styleId = "demo-default";
-  const version = createStyleVersion(styleId, buildDefaultStyleTemplate({ styleId }));
-  publishStyleVersion(styleId, version.id);
+  const version = await createStyleVersion(styleId, buildDefaultStyleTemplate({ styleId }));
+  await publishStyleVersion(styleId, version.id);
   return styleId;
 }
 
@@ -277,22 +298,36 @@ async function registerArtifactForSource(
   readonly id: string;
   readonly key: string;
   readonly size: number;
-}> {
+} | null> {
   if (source.localPath) {
-    await access(source.localPath, fsConstants.R_OK);
+    try {
+      await access(source.localPath, fsConstants.R_OK);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "unavailable";
+      console.warn(`Demo PMTiles source unavailable at ${source.localPath}: ${reason}`);
+      return null;
+    }
   }
-  const head = await store.head(source.artifactKey);
+  let head;
+  try {
+    head = await store.head(source.artifactKey);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "unavailable";
+    console.warn(`Demo PMTiles object unavailable at ${source.location}: ${reason}`);
+    return null;
+  }
   if (head.size <= 0) {
-    throw new Error(`PMTiles source is empty: ${source.location}`);
+    console.warn(`Demo PMTiles source is empty: ${source.location}`);
+    return null;
   }
   const artifactId = `artifact-${source.artifactLabel}-${head.size}`;
   const checksum = createHash("sha256")
     .update(`${source.artifactKey}:${head.size}:${head.lastModified}:${head.etag}`)
     .digest("hex");
 
-  const existing = listArtifacts().find((entry) => entry.id === artifactId);
+  const existing = (await listArtifacts()).find((entry) => entry.id === artifactId);
   if (!existing) {
-    registerArtifact({
+    await registerArtifact({
       id: artifactId,
       key: source.artifactKey,
       checksum,
@@ -302,7 +337,7 @@ async function registerArtifactForSource(
     });
   }
   try {
-    promoteArtifact(artifactId);
+    await promoteArtifact(artifactId);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (!message.includes("already active")) {
@@ -316,13 +351,12 @@ async function registerArtifactForSource(
   };
 }
 
-function resolveAccessToken(): string {
-  const raw = process.env.ALLOWED_TILES_TOKENS ?? "demo-public-token";
-  const token = raw
-    .split(",")
-    .map((entry) => entry.trim())
-    .find((entry) => entry.length > 0);
-  return token ?? "demo-public-token";
+function resolveAccessToken(tokens: readonly string[]): string {
+  const token = tokens.find((entry) => entry.length > 0);
+  if (token === undefined) {
+    throw new Error("ALLOWED_TILES_TOKENS must include a token for the demo surface");
+  }
+  return token;
 }
 
 export async function bootstrapDemoData(): Promise<DemoBootstrapState> {
@@ -350,14 +384,15 @@ export async function bootstrapDemoData(): Promise<DemoBootstrapState> {
     }
   }
 
-  const styleIds = loaded.length > 0 ? loaded : [defaultStyleFallback()];
+  const styleIds = loaded.length > 0 ? loaded : [await defaultStyleFallback()];
   return {
-    artifactId: artifact.id,
-    artifactKey: artifact.key,
-    artifactByteSize: artifact.size,
-    styleIds: styleIds.length > 0 ? styleIds : listStyles().map((entry) => entry.id),
-    accessToken: resolveAccessToken(),
-    adminToken: process.env.ADMIN_TOKEN ?? "demo-admin-token",
+    artifactId: artifact?.id ?? "artifact-unavailable",
+    artifactKey: artifact?.key ?? pmtilesSource.artifactKey,
+    artifactByteSize: artifact?.size ?? 0,
+    artifactAvailable: artifact !== null,
+    styleIds: styleIds.length > 0 ? styleIds : (await listStyles()).map((entry) => entry.id),
+    accessToken: resolveAccessToken(config.security.allowedTokens),
+    adminToken: config.security.adminToken,
     pmtilesLocation: pmtilesSource.location,
     pmtilesLocalPath: pmtilesSource.localPath,
   };

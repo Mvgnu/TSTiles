@@ -8,11 +8,11 @@ import {
 } from "./response";
 
 export async function adminRollbackArtifactRoute(token: string): Promise<AdminRouteResponse> {
-  if (!isAuthorized(token)) {
+  if (!(await isAuthorized(token))) {
     return unauthorizedAdminResponse();
   }
   try {
-    return adminJsonResponse(200, rollbackArtifactEndpoint(token));
+    return adminJsonResponse(200, await rollbackArtifactEndpoint(token));
   } catch (error) {
     return adminErrorResponse(error, {
       defaultStatus: 409,

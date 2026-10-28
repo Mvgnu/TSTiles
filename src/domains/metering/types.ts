@@ -19,7 +19,7 @@ export class MeteringError extends Error {
   }
 }
 
-export type QuotaReason = "quota" | "rate_limit";
+export type QuotaReason = "quota" | "rate_limit" | "workspace_suspended";
 
 export interface QuotaDecision {
   readonly allow: boolean;

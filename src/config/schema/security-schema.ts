@@ -1,4 +1,5 @@
-import type { SecurityConfig } from "../types";
+import { loadRuntimeSecuritySecrets } from "../security-secrets";
+import type { RuntimeEnvironment, SecurityConfig } from "../types";
 
 function parseBoolean(value: string | undefined, fallback: boolean): boolean {
   if (value === undefined) {
@@ -25,11 +26,11 @@ function parsePositiveInt(value: string | undefined, fallback: number, label: st
   return parsed;
 }
 
-export function parseSecurityConfig(input: Record<string, string | undefined>): SecurityConfig {
-  const adminToken = (input.ADMIN_TOKEN ?? "").trim();
-  if (!adminToken) {
-    throw new Error("admin token missing");
-  }
+export function parseSecurityConfig(
+  input: Record<string, string | undefined>,
+  environment: RuntimeEnvironment,
+): SecurityConfig {
+  const secrets = loadRuntimeSecuritySecrets(input, environment);
 
   const allowedOrigins = (input.ALLOWED_ORIGINS ?? "*")
     .split(",")
@@ -42,7 +43,7 @@ export function parseSecurityConfig(input: Record<string, string | undefined>): 
     .filter(Boolean);
 
   return {
-    adminToken,
+    ...secrets,
     allowedOrigins: allowedOrigins.length ? allowedOrigins : ["*"],
     allowedTokens,
     corsAllowCredentials: parseBoolean(input.CORS_ALLOW_CREDENTIALS, false),

@@ -13,6 +13,50 @@ export interface DocsIndex {
   readonly sections: ReadonlyArray<DocsIndexSection>;
 }
 
+export type DocsGuideSlug =
+  | "index"
+  | "quickstart"
+  | "authentication"
+  | "maplibre"
+  | "raster"
+  | "static-maps"
+  | "styles"
+  | "api"
+  | "examples";
+
+export interface DocsGuideNavItem {
+  readonly slug: DocsGuideSlug;
+  readonly label: string;
+  readonly href: string;
+}
+
+export interface DocsGuideCodeExample {
+  readonly label: string;
+  readonly language: string;
+  readonly code: string;
+}
+
+export interface DocsGuideSection {
+  readonly id: string;
+  readonly title: string;
+  readonly body: string;
+  readonly callout?: string;
+  readonly codeExamples?: ReadonlyArray<DocsGuideCodeExample>;
+}
+
+export interface DocsGuidePage {
+  readonly slug: DocsGuideSlug;
+  readonly title: string;
+  readonly summary: string;
+  readonly nav: ReadonlyArray<DocsGuideNavItem>;
+  readonly sections: ReadonlyArray<DocsGuideSection>;
+  readonly ctas: ReadonlyArray<{
+    readonly label: string;
+    readonly href: string;
+    readonly action?: "create-project" | "open-dashboard" | "get-api-key";
+  }>;
+}
+
 export interface OpenApiRoute {
   readonly method: "GET" | "HEAD" | "OPTIONS" | "POST";
   readonly path: string;

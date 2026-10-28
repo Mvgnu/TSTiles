@@ -21,7 +21,11 @@ function isValidDecodedStyleId(rawSegment: string | undefined): boolean {
     return false;
   }
   const normalized = decoded.trim();
-  return normalized.length > 0 && !normalized.includes("/");
+  return normalized.length > 0
+    && normalized !== "."
+    && !normalized.includes("/")
+    && !normalized.includes("\\")
+    && !normalized.includes("..");
 }
 
 function stripQuery(path: string): string {

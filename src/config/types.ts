@@ -1,5 +1,5 @@
 export interface StorageConfig {
-  readonly mode: "memory" | "s3-compatible";
+  readonly mode: "memory" | "filesystem" | "s3-compatible";
   readonly bucketName: string;
   readonly region?: string;
   readonly endpoint?: string;
@@ -9,12 +9,24 @@ export interface StorageConfig {
 
 export interface SecurityConfig {
   readonly adminToken: string;
+  readonly csrfSigningKey: string;
+  readonly ipHashKey: string;
+  readonly mfaEncryptionKey: string;
   readonly allowedOrigins: readonly string[];
   readonly allowedTokens: readonly string[];
   readonly corsAllowCredentials: boolean;
   readonly corsMaxAgeSeconds: number;
   readonly enableRateLimit: boolean;
   readonly rateLimitMaxRequestsPerMinute: number;
+}
+
+export type RuntimeEnvironment = "development" | "staging" | "production";
+
+export interface RuntimeSecuritySecrets {
+  readonly adminToken: string;
+  readonly csrfSigningKey: string;
+  readonly ipHashKey: string;
+  readonly mfaEncryptionKey: string;
 }
 
 export interface TileDeliveryPolicy {
@@ -25,8 +37,12 @@ export interface TileDeliveryPolicy {
   readonly globalRequestBudgetPerMinute: number;
   readonly renderTimeoutMs: number;
   readonly renderMaxConcurrent: number;
-  readonly renderBackend: "local" | "remote";
 }
+
+export type ObservabilityLogSink =
+  | { readonly kind: "none" }
+  | { readonly kind: "stdout" }
+  | { readonly kind: "file"; readonly path: string };
 
 export interface ObservabilityConfig {
   readonly cacheWarnThreshold: number;
@@ -34,6 +50,7 @@ export interface ObservabilityConfig {
   readonly errorWarnThreshold: number;
   readonly errorCriticalThreshold: number;
   readonly enabled: boolean;
+  readonly logSink: ObservabilityLogSink;
 }
 
 export interface IngestDefaults {
@@ -44,7 +61,7 @@ export interface IngestDefaults {
 }
 
 export interface RuntimeConfig {
-  readonly environment: "development" | "staging" | "production";
+  readonly environment: RuntimeEnvironment;
   readonly storage: StorageConfig;
   readonly security: SecurityConfig;
   readonly tileDeliveryPolicy: TileDeliveryPolicy;

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { loadConfig } from "../../config/load-config";
+import { prisma } from "../../config/db";
 import { ConfigError } from "../../config/types";
 import { runIngestPipeline, buildDefaultSnapshot } from "../ingest/ingest.service";
 import {
@@ -16,12 +17,13 @@ import {
 } from "./types";
 import type { IngestRunReport } from "../ingest/types";
 import { isAuthorized, normalizeAdminToken } from "./auth/admin-auth";
-import { createProject, rotateApiKey } from "../projects/projects.service";
+import { createProject, listProjects, rotateApiKey } from "../projects/projects.service";
 import { ProjectsError, ProjectsErrorCode, type ProjectCreationInput, type ProjectPolicy } from "../projects/types";
 import { createStyleVersion, publishStyleVersion } from "../styles/styles.service";
 import { StyleError, StyleErrorCode } from "../styles/types";
 import { getUsageSummary } from "../metering/metering.service";
 import type { UsageCounterWindow } from "../metering/types";
+import { getSession } from "../identity/identity.service";
 
 const jobCounter = new Map<string, number>();
 const recentJobs = new Map<string, JobMetadata>();
@@ -30,6 +32,41 @@ const auditLog: AuditEvent[] = [];
 
 const AUDIT_RETENTION = 50;
 const JOB_RETENTION = 25;
+// Persistent audit/job retention bounds. Sweeps run amortized after each
+// mutating write so retention does not require an external cron job.
+const PERSISTENT_AUDIT_RETENTION_DAYS = 30;
+const PERSISTENT_JOB_RETENTION_DAYS = 30;
+const SWEEP_INTERVAL_WRITES = 64;
+let writeCountSinceLastSweep = 0;
+
+async function sweepPersistentRetention(): Promise<void> {
+  const now = Date.now();
+  const auditCutoffIso = new Date(now - PERSISTENT_AUDIT_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const jobCutoffIso = new Date(now - PERSISTENT_JOB_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  try {
+    await prisma.adminAuditEvent.deleteMany({
+      where: { recordedAt: { lt: auditCutoffIso } },
+    });
+    await prisma.adminJob.deleteMany({
+      where: {
+        recordedAt: { lt: jobCutoffIso },
+        status: { in: ["finished", "failed"] },
+      },
+    });
+  } catch {
+    // Retention sweeps are best-effort; do not fail mutating writes if the
+    // sweep itself errors. The next sweep window will retry.
+  }
+}
+
+function maybeScheduleRetentionSweep(): void {
+  writeCountSinceLastSweep += 1;
+  if (writeCountSinceLastSweep < SWEEP_INTERVAL_WRITES) {
+    return;
+  }
+  writeCountSinceLastSweep = 0;
+  void sweepPersistentRetention();
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -37,6 +74,72 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function normalizeAllowedOrigin(origin: string): string {
+  const trimmed = origin.trim();
+  if (trimmed.length === 0) {
+    throw new ControlPlaneError(
+      ControlPlaneErrorCode.BAD_REQUEST,
+      "policy.allowedOrigins entries must be non-empty strings",
+    );
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new ControlPlaneError(
+      ControlPlaneErrorCode.BAD_REQUEST,
+      "policy.allowedOrigins entries must be absolute http(s) origins",
+    );
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new ControlPlaneError(
+      ControlPlaneErrorCode.BAD_REQUEST,
+      "policy.allowedOrigins entries must be absolute http(s) origins",
+    );
+  }
+  if (parsed.username.length > 0 || parsed.password.length > 0) {
+    throw new ControlPlaneError(
+      ControlPlaneErrorCode.BAD_REQUEST,
+      "policy.allowedOrigins entries must not include credentials",
+    );
+  }
+  if (parsed.pathname !== "/" || parsed.search.length > 0 || parsed.hash.length > 0) {
+    throw new ControlPlaneError(
+      ControlPlaneErrorCode.BAD_REQUEST,
+      "policy.allowedOrigins entries must be bare origins without path, query, or fragment",
+    );
+  }
+  return parsed.origin;
+}
+
+function normalizeProjectPlanId(planId: string | undefined): string | undefined {
+  if (planId === undefined) {
+    return undefined;
+  }
+  const normalized = planId.trim();
+  if (normalized.length === 0) {
+    throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "planId must be non-empty");
+  }
+  if (!/^[a-z0-9][a-z0-9_-]*$/i.test(normalized)) {
+    throw new ControlPlaneError(
+      ControlPlaneErrorCode.BAD_REQUEST,
+      "planId must be alphanumeric (plus _ or -)",
+    );
+  }
+  return normalized.toLowerCase();
+}
+
+function normalizeProjectName(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "Project name is required");
+  }
+  const normalized = value.trim();
+  if (normalized.length === 0) {
+    throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "Project name is required");
+  }
+  return normalized;
 }
 
 function parseProjectPolicyInput(policy: unknown): Partial<ProjectPolicy> | undefined {
@@ -53,6 +156,7 @@ function parseProjectPolicyInput(policy: unknown): Partial<ProjectPolicy> | unde
       throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "policy.allowedOrigins must be an array");
     }
     const origins: string[] = [];
+    const seenOrigins = new Set<string>();
     for (const entry of policy.allowedOrigins) {
       if (typeof entry !== "string" || entry.trim().length === 0) {
         throw new ControlPlaneError(
@@ -60,7 +164,12 @@ function parseProjectPolicyInput(policy: unknown): Partial<ProjectPolicy> | unde
           "policy.allowedOrigins entries must be non-empty strings",
         );
       }
-      origins.push(entry.trim());
+      const normalizedOrigin = normalizeAllowedOrigin(entry);
+      if (seenOrigins.has(normalizedOrigin)) {
+        continue;
+      }
+      seenOrigins.add(normalizedOrigin);
+      origins.push(normalizedOrigin);
     }
     allowedOrigins = origins;
   }
@@ -195,17 +304,39 @@ function nextJobId(): string {
   return `job-${next}`;
 }
 
-function toPublicActor(token: string | undefined): string {
+async function toPublicActor(token: unknown): Promise<string> {
   const normalized = normalizeAdminToken(token);
   if (!normalized) {
     return "anonymous";
+  }
+  const config = loadConfig();
+  if (normalized === config.security.adminToken) {
+    const digest = createHash("sha256").update(normalized).digest("hex").slice(0, 12);
+    return `admin:${digest}`;
+  }
+  const session = await getSession(normalized);
+  if (session?.sessionKind === "ops") {
+    return `operator:${session.user.id}`;
   }
   const digest = createHash("sha256").update(normalized).digest("hex").slice(0, 12);
   return `admin:${digest}`;
 }
 
-function addAudit(event: Omit<AuditEvent, "id">): void {
+async function addAudit(event: Omit<AuditEvent, "id">): Promise<void> {
   const id = `audit-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  const recordedAt = new Date().toISOString();
+  await prisma.adminAuditEvent.create({
+    data: {
+      id,
+      actor: event.actor,
+      operation: event.operation,
+      outcome: event.outcome,
+      startedAt: event.startedAt,
+      completedAt: event.completedAt,
+      message: event.message,
+      recordedAt,
+    },
+  });
   auditLog.unshift({
     ...event,
     id,
@@ -213,9 +344,33 @@ function addAudit(event: Omit<AuditEvent, "id">): void {
   if (auditLog.length > AUDIT_RETENTION) {
     auditLog.length = AUDIT_RETENTION;
   }
+  maybeScheduleRetentionSweep();
 }
 
-function addJob(job: JobMetadata): void {
+async function addJob(job: JobMetadata): Promise<void> {
+  const recordedAt = new Date().toISOString();
+  await prisma.adminJob.upsert({
+    where: { jobId: job.jobId },
+    update: {
+      status: job.status,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+      actor: job.actor,
+      snapshotId: job.snapshotId,
+      outcome: job.outcome,
+      recordedAt,
+    },
+    create: {
+      jobId: job.jobId,
+      status: job.status,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+      actor: job.actor,
+      snapshotId: job.snapshotId,
+      outcome: job.outcome,
+      recordedAt,
+    },
+  });
   jobHistory.unshift(job);
   recentJobs.set(job.jobId, job);
   if (jobHistory.length > JOB_RETENTION) {
@@ -229,42 +384,74 @@ function addJob(job: JobMetadata): void {
   }
 }
 
-function normalizeRequiredId(value: string, label: string): string {
+function normalizeRequiredId(value: unknown, label: string): string {
+  if (typeof value !== "string") {
+    throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, `${label} must be a string`);
+  }
   const normalized = value.trim();
   if (normalized.length === 0) {
     throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, `${label} is required`);
   }
+  if (
+    normalized.includes("/")
+    || normalized.includes("\\")
+    || normalized === "."
+    || normalized === ".."
+    || normalized.includes("..")
+  ) {
+    throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, `${label} contains unsupported path characters`);
+  }
   return normalized;
+}
+
+async function assertProjectExists(projectId: string): Promise<void> {
+  const projects = await listProjects();
+  if (!projects.some((project) => project.id === projectId)) {
+    throw new ControlPlaneError(ControlPlaneErrorCode.CONFLICT, "project not found");
+  }
 }
 
 function parseCreateProjectInput(input: unknown): ProjectCreationInput {
   if (!isRecord(input)) {
     throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "Project payload is required");
   }
-  const name = input.name;
-  if (typeof name !== "string" || name.trim().length === 0) {
-    throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "Project name is required");
-  }
+  const name = normalizeProjectName(input.name);
   const planId = input.planId;
   if (planId !== undefined && typeof planId !== "string") {
     throw new ControlPlaneError(ControlPlaneErrorCode.BAD_REQUEST, "planId must be a string");
   }
   const policy = parseProjectPolicyInput(input.policy);
   return {
-    name: name.trim(),
-    planId,
+    name,
+    planId: normalizeProjectPlanId(planId),
     policy,
   };
 }
 
-function assertAdmin(actorToken?: string): string {
-  if (!isAuthorized(actorToken)) {
+async function assertAdmin(actorToken?: unknown): Promise<string> {
+  if (!(await isAuthorized(actorToken))) {
     throw new ControlPlaneError(ControlPlaneErrorCode.UNAUTHORIZED, "Unauthorized");
   }
-  return toPublicActor(actorToken);
+  return await toPublicActor(actorToken);
 }
 
-function replaceJob(job: JobMetadata): void {
+async function replaceJob(job: JobMetadata): Promise<void> {
+  const recordedAt = new Date().toISOString();
+  await prisma.adminJob.update({
+    where: { jobId: job.jobId },
+    data: {
+      status: job.status,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+      actor: job.actor,
+      snapshotId: job.snapshotId,
+      outcome: job.outcome,
+      recordedAt,
+    },
+  }).catch(() => {
+    // Job may have been pruned from the persistent store; in that case the
+    // hot cache update is the only update we can apply.
+  });
   const current = recentJobs.get(job.jobId);
   if (!current) {
     return;
@@ -320,7 +507,7 @@ function toControlPlaneError(error: unknown): never {
   throw new ControlPlaneError(ControlPlaneErrorCode.DEPENDENCY_FAILED, "Control plane operation failed");
 }
 
-function summarizeArtifactList(artifacts: ReturnType<typeof listArtifacts>): ArtifactSummary[] {
+function summarizeArtifactList(artifacts: Awaited<ReturnType<typeof listArtifacts>>): ArtifactSummary[] {
   return artifacts.map((artifact) => ({
     id: artifact.id,
     key: artifact.key,
@@ -332,7 +519,7 @@ function summarizeArtifactList(artifacts: ReturnType<typeof listArtifacts>): Art
 }
 
 export async function triggerIngest(actorToken?: string): Promise<JobMetadata> {
-  const actor = assertAdmin(actorToken);
+  const actor = await assertAdmin(actorToken);
   const id = nextJobId();
   const snapshot = buildDefaultSnapshot();
   const startedAt = new Date().toISOString();
@@ -342,22 +529,22 @@ export async function triggerIngest(actorToken?: string): Promise<JobMetadata> {
     startedAt,
     actor,
   };
-  addJob({
+  await addJob({
     ...job,
     snapshotId: snapshot.snapshotId,
   });
 
   void runIngestPipeline(snapshot)
-    .then((report): void => {
-      registerArtifact(buildArtifactMetadata(report));
+    .then(async (report): Promise<void> => {
+      await registerArtifact(buildArtifactMetadata(report));
       const completedJob: JobMetadata = {
         ...job,
         status: "finished",
         completedAt: new Date().toISOString(),
         outcome: "ok",
       };
-      replaceJob(completedJob);
-      addAudit({
+      await replaceJob(completedJob);
+      await addAudit({
         actor,
         operation: "ingest",
         outcome: "ok",
@@ -366,7 +553,7 @@ export async function triggerIngest(actorToken?: string): Promise<JobMetadata> {
         message: report.artifactId,
       });
     })
-    .catch((error: unknown): void => {
+    .catch(async (error: unknown): Promise<void> => {
       const failureMessage = normalizeErrorMessage(error);
       const failedJob: JobMetadata = {
         ...job,
@@ -374,8 +561,8 @@ export async function triggerIngest(actorToken?: string): Promise<JobMetadata> {
         completedAt: new Date().toISOString(),
         outcome: "failed",
       };
-      replaceJob(failedJob);
-      addAudit({
+      await replaceJob(failedJob);
+      await addAudit({
         actor,
         operation: "ingest",
         outcome: "failed",
@@ -389,10 +576,10 @@ export async function triggerIngest(actorToken?: string): Promise<JobMetadata> {
   };
 }
 
-export function listArtifactsEndpoint(actorToken?: string): ArtifactSummary[] {
-  const actor = assertAdmin(actorToken);
-  const artifacts = listArtifacts();
-  addAudit({
+export async function listArtifactsEndpoint(actorToken?: string): Promise<ArtifactSummary[]> {
+  const actor = await assertAdmin(actorToken);
+  const artifacts = await listArtifacts();
+  await addAudit({
     actor,
     operation: "list_artifacts",
     outcome: "ok",
@@ -403,13 +590,13 @@ export function listArtifactsEndpoint(actorToken?: string): ArtifactSummary[] {
   return summarizeArtifactList(artifacts);
 }
 
-export function promoteArtifactEndpoint(versionId: string, actorToken?: string): ReturnType<typeof promoteArtifact> {
-  const actor = assertAdmin(actorToken);
+export async function promoteArtifactEndpoint(versionId: string, actorToken?: string): Promise<Awaited<ReturnType<typeof promoteArtifact>>> {
+  const actor = await assertAdmin(actorToken);
   const normalizedVersionId = normalizeRequiredId(versionId, "versionId");
   const startedAt = new Date().toISOString();
   try {
-    const pointer = promoteArtifact(normalizedVersionId);
-    addAudit({
+    const pointer = await promoteArtifact(normalizedVersionId);
+    await addAudit({
       actor,
       operation: "promote_artifact",
       outcome: "ok",
@@ -419,7 +606,7 @@ export function promoteArtifactEndpoint(versionId: string, actorToken?: string):
     });
     return pointer;
   } catch (error: unknown) {
-    addAudit({
+    await addAudit({
       actor,
       operation: "promote_artifact",
       outcome: "failed",
@@ -431,12 +618,12 @@ export function promoteArtifactEndpoint(versionId: string, actorToken?: string):
   }
 }
 
-export function rollbackArtifactEndpoint(actorToken?: string): ReturnType<typeof rollbackArtifact> {
-  const actor = assertAdmin(actorToken);
+export async function rollbackArtifactEndpoint(actorToken?: string): Promise<Awaited<ReturnType<typeof rollbackArtifact>>> {
+  const actor = await assertAdmin(actorToken);
   const startedAt = new Date().toISOString();
   try {
-    const pointer = rollbackArtifact();
-    addAudit({
+    const pointer = await rollbackArtifact();
+    await addAudit({
       actor,
       operation: "rollback_artifact",
       outcome: "ok",
@@ -445,7 +632,7 @@ export function rollbackArtifactEndpoint(actorToken?: string): ReturnType<typeof
     });
     return pointer;
   } catch (error: unknown) {
-    addAudit({
+    await addAudit({
       actor,
       operation: "rollback_artifact",
       outcome: "failed",
@@ -457,13 +644,13 @@ export function rollbackArtifactEndpoint(actorToken?: string): ReturnType<typeof
   }
 }
 
-export function createProjectEndpoint(input: unknown, actorToken?: string): ReturnType<typeof createProject> {
-  const actor = assertAdmin(actorToken);
+export async function createProjectEndpoint(input: unknown, actorToken?: string): Promise<Awaited<ReturnType<typeof createProject>>> {
+  const actor = await assertAdmin(actorToken);
   const startedAt = new Date().toISOString();
   try {
     const parsedInput = parseCreateProjectInput(input);
-    const created = createProject(parsedInput);
-    addAudit({
+    const created = await createProject(parsedInput);
+    await addAudit({
       actor,
       operation: "create_project",
       outcome: "ok",
@@ -473,7 +660,7 @@ export function createProjectEndpoint(input: unknown, actorToken?: string): Retu
     });
     return created;
   } catch (error: unknown) {
-    addAudit({
+    await addAudit({
       actor,
       operation: "create_project",
       outcome: "failed",
@@ -485,13 +672,13 @@ export function createProjectEndpoint(input: unknown, actorToken?: string): Retu
   }
 }
 
-export function rotateApiKeyEndpoint(projectId: string, actorToken?: string): ReturnType<typeof rotateApiKey> {
-  const actor = assertAdmin(actorToken);
+export async function rotateApiKeyEndpoint(projectId: string, actorToken?: string): Promise<Awaited<ReturnType<typeof rotateApiKey>>> {
+  const actor = await assertAdmin(actorToken);
   const normalizedProjectId = normalizeRequiredId(projectId, "projectId");
   const startedAt = new Date().toISOString();
   try {
-    const key = rotateApiKey(normalizedProjectId);
-    addAudit({
+    const key = await rotateApiKey(normalizedProjectId);
+    await addAudit({
       actor,
       operation: "rotate_api_key",
       outcome: "ok",
@@ -501,7 +688,7 @@ export function rotateApiKeyEndpoint(projectId: string, actorToken?: string): Re
     });
     return key;
   } catch (error: unknown) {
-    addAudit({
+    await addAudit({
       actor,
       operation: "rotate_api_key",
       outcome: "failed",
@@ -513,29 +700,42 @@ export function rotateApiKeyEndpoint(projectId: string, actorToken?: string): Re
   }
 }
 
-export function getProjectUsageEndpoint(projectId: string, window: UsageCounterWindow, actorToken?: string): ReturnType<typeof getUsageSummary> {
-  const actor = assertAdmin(actorToken);
+export async function getProjectUsageEndpoint(projectId: string, window: UsageCounterWindow, actorToken?: string): Promise<Awaited<ReturnType<typeof getUsageSummary>>> {
+  const actor = await assertAdmin(actorToken);
   const normalizedProjectId = normalizeRequiredId(projectId, "projectId");
   const startedAt = new Date().toISOString();
-  const usage = getUsageSummary(normalizedProjectId, window);
-  addAudit({
-    actor,
-    operation: "get_project_usage",
-    outcome: "ok",
-    startedAt,
-    completedAt: new Date().toISOString(),
-    message: `${normalizedProjectId}:${window}:${usage.length}`,
-  });
-  return usage;
+  try {
+    await assertProjectExists(normalizedProjectId);
+    const usage = await getUsageSummary(normalizedProjectId, window);
+    await addAudit({
+      actor,
+      operation: "get_project_usage",
+      outcome: "ok",
+      startedAt,
+      completedAt: new Date().toISOString(),
+      message: `${normalizedProjectId}:${window}:${usage.length}`,
+    });
+    return usage;
+  } catch (error: unknown) {
+    await addAudit({
+      actor,
+      operation: "get_project_usage",
+      outcome: "failed",
+      startedAt,
+      completedAt: new Date().toISOString(),
+      message: normalizeErrorMessage(error),
+    });
+    toControlPlaneError(error);
+  }
 }
 
-export function createStyleVersionEndpoint(styleId: string, input: unknown, actorToken?: string): ReturnType<typeof createStyleVersion> {
-  const actor = assertAdmin(actorToken);
+export async function createStyleVersionEndpoint(styleId: string, input: unknown, actorToken?: string): Promise<Awaited<ReturnType<typeof createStyleVersion>>> {
+  const actor = await assertAdmin(actorToken);
   const normalizedStyleId = normalizeRequiredId(styleId, "styleId");
   const startedAt = new Date().toISOString();
   try {
-    const version = createStyleVersion(normalizedStyleId, input);
-    addAudit({
+    const version = await createStyleVersion(normalizedStyleId, input);
+    await addAudit({
       actor,
       operation: "create_style_version",
       outcome: "ok",
@@ -545,7 +745,7 @@ export function createStyleVersionEndpoint(styleId: string, input: unknown, acto
     });
     return version;
   } catch (error: unknown) {
-    addAudit({
+    await addAudit({
       actor,
       operation: "create_style_version",
       outcome: "failed",
@@ -557,14 +757,14 @@ export function createStyleVersionEndpoint(styleId: string, input: unknown, acto
   }
 }
 
-export function publishStyleVersionEndpoint(styleId: string, versionId: string, actorToken?: string): ReturnType<typeof publishStyleVersion> {
-  const actor = assertAdmin(actorToken);
+export async function publishStyleVersionEndpoint(styleId: string, versionId: string, actorToken?: string): Promise<Awaited<ReturnType<typeof publishStyleVersion>>> {
+  const actor = await assertAdmin(actorToken);
   const normalizedStyleId = normalizeRequiredId(styleId, "styleId");
   const normalizedVersionId = normalizeRequiredId(versionId, "versionId");
   const startedAt = new Date().toISOString();
   try {
-    const version = publishStyleVersion(normalizedStyleId, normalizedVersionId);
-    addAudit({
+    const version = await publishStyleVersion(normalizedStyleId, normalizedVersionId);
+    await addAudit({
       actor,
       operation: "publish_style_version",
       outcome: "ok",
@@ -574,7 +774,7 @@ export function publishStyleVersionEndpoint(styleId: string, versionId: string, 
     });
     return version;
   } catch (error: unknown) {
-    addAudit({
+    await addAudit({
       actor,
       operation: "publish_style_version",
       outcome: "failed",
@@ -586,15 +786,84 @@ export function publishStyleVersionEndpoint(styleId: string, versionId: string, 
   }
 }
 
-export function healthStatusEndpoint(actorToken?: string): HealthStatus {
-  assertAdmin(actorToken);
+export async function listAuditEventsEndpoint(
+  actorToken?: string,
+  limit = 100,
+): Promise<AuditEvent[]> {
+  await assertAdmin(actorToken);
+  const safeLimit = Math.min(Math.max(Math.floor(limit), 1), 500);
+  const rows = await prisma.adminAuditEvent.findMany({
+    orderBy: { recordedAt: "desc" },
+    take: safeLimit,
+  });
+  return rows.map((row) => ({
+    id: row.id,
+    actor: row.actor,
+    operation: row.operation as AuditEvent["operation"],
+    outcome: row.outcome as AuditEvent["outcome"],
+    startedAt: row.startedAt,
+    completedAt: row.completedAt ?? undefined,
+    message: row.message ?? undefined,
+  }));
+}
+
+export async function listJobsEndpoint(
+  actorToken?: string,
+  limit = 50,
+): Promise<JobMetadata[]> {
+  await assertAdmin(actorToken);
+  const safeLimit = Math.min(Math.max(Math.floor(limit), 1), 200);
+  const rows = await prisma.adminJob.findMany({
+    orderBy: { recordedAt: "desc" },
+    take: safeLimit,
+  });
+  return rows.map((row) => ({
+    jobId: row.jobId,
+    status: row.status as JobMetadata["status"],
+    startedAt: row.startedAt,
+    completedAt: row.completedAt ?? undefined,
+    actor: row.actor ?? undefined,
+    snapshotId: row.snapshotId ?? undefined,
+    outcome: (row.outcome ?? undefined) as JobMetadata["outcome"],
+  }));
+}
+
+async function probeDatabaseReachable(): Promise<boolean> {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function countRecentAuditEvents(windowMs: number): Promise<number> {
+  const cutoffIso = new Date(Date.now() - windowMs).toISOString();
+  try {
+    return await prisma.adminAuditEvent.count({
+      where: { startedAt: { gte: cutoffIso } },
+    });
+  } catch {
+    // If the audit table is unreachable the in-memory hot cache is the only
+    // available signal; report that bounded view so callers can still see
+    // whether mutating traffic recently flowed through this instance.
+    const now = Date.now();
+    return auditLog.filter((event) => now - Date.parse(event.startedAt) < windowMs).length;
+  }
+}
+
+export async function healthStatusEndpoint(actorToken?: string): Promise<HealthStatus> {
+  await assertAdmin(actorToken);
   const config = loadConfig();
-  const now = Date.now();
-  const recentAudit = auditLog.filter((event) => now - Date.parse(event.startedAt) < 1000 * 60 * 5).length;
+  const auditWindowMs = 1000 * 60 * 5;
+  const [databaseReachable, auditEventsInWindow] = await Promise.all([
+    probeDatabaseReachable(),
+    countRecentAuditEvents(auditWindowMs),
+  ]);
   return {
-    ok: true,
-    storageReachable: true,
+    ok: databaseReachable,
+    storageReachable: databaseReachable,
     configVersion: `${config.environment}-${config.storage.mode}`,
-    auditEventsInWindow: recentAudit,
+    auditEventsInWindow,
   };
 }

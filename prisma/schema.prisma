@@ -1,0 +1,326 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id          String   @id
+  workspaceId String
+  name        String   @unique
+  policy      String   // Stored as JSON string
+  planId      String
+  createdAt   String
+  apiKeys     ApiKey[]
+
+  @@index([workspaceId])
+}
+
+model ApiKey {
+  keyHash   String  @id
+  keyId     String  @unique
+  keyIdHash String  @unique
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt String
+  revoked   Boolean @default(false)
+
+  @@index([projectId])
+}
+
+model BillingSnapshot {
+  workspaceId          String  @id
+  planId               String
+  subscriptionStatus   String
+  stripeCustomerId     String? @unique
+  stripeSubscriptionId String? @unique
+  billingEmail         String?
+  currentPeriodEnd     String?
+  cancelAtPeriodEnd    Boolean @default(false)
+  lastWebhookAt        String?
+}
+
+model CheckoutSession {
+  sessionId   String @id
+  workspaceId String
+  planId      String
+  successUrl  String
+  cancelUrl   String
+  createdAt   String
+  expiresAt   String
+}
+
+model UsageBucket {
+  compositeKey  String @id // e.g. "projectId|keyHash|planId|endpointGroup|window|bucketUrl"
+  projectId     String
+  keyHash       String
+  planId        String
+  endpointGroup String
+  window        String
+  bucket        String
+  requestCount  Int    @default(0)
+
+  @@index([projectId, window, bucket])
+  @@index([bucket])
+}
+
+model GlobalBudgetBucket {
+  bucket       String @id
+  requestCount Int    @default(0)
+}
+
+model ArtifactVersion {
+  id          String  @id
+  datasetId   String
+  storageKey  String
+  sizeBytes   BigInt
+  format      String
+  validatedAt String?
+  createdAt   String
+  checksum    String  @default("")
+  validated   Boolean @default(false)
+  metadata    String  @default("")
+
+  @@index([datasetId, createdAt])
+}
+
+model ActiveArtifact {
+  datasetId   String @id
+  versionId   String
+  activeSince String @default("")
+}
+
+model ArtifactPromotionHistory {
+  id          Int    @id @default(autoincrement())
+  datasetId   String
+  versionId   String
+  activeSince String
+  recordedAt  String
+
+  @@index([datasetId, recordedAt])
+}
+
+model AdminAuditEvent {
+  id          String  @id
+  actor       String
+  operation   String
+  outcome     String
+  startedAt   String
+  completedAt String?
+  message     String?
+  recordedAt  String
+
+  @@index([recordedAt])
+  @@index([operation, recordedAt])
+}
+
+model AdminJob {
+  jobId       String  @id
+  status      String
+  startedAt   String
+  completedAt String?
+  actor       String?
+  snapshotId  String?
+  outcome     String?
+  recordedAt  String
+
+  @@index([recordedAt])
+}
+
+model IngestRun {
+  cacheKey          String  @id
+  snapshotId        String
+  artifactId        String
+  artifactKey       String
+  checksum          String
+  byteSize          BigInt
+  validated         Boolean
+  startedAt         String
+  completedAt       String
+  durationMs        Int
+  validationSummary String
+  recordedAt        String
+
+  @@index([snapshotId, recordedAt])
+  @@index([recordedAt])
+}
+
+model BillingWebhookEvent {
+  eventId     String  @id
+  workspaceId String
+  type        String
+  occurredAt  String
+  recordedAt  String
+
+  @@index([workspaceId, recordedAt])
+  @@index([recordedAt])
+}
+
+model IdentityUser {
+  id                           String  @id
+  email                        String  @unique
+  name                         String
+  passwordHash                 String? // argon2id encoded
+  emailVerifiedAt              String?
+  mfaSecretEncrypted           String? // AES-GCM
+  mfaEnabledAt                 String?
+  mfaRecoveryCodesHashedJson   String? // JSON array of argon2id-hashed recovery codes
+  roleOperatorGrantedAt        String?
+  roleOperatorGrantedByUserId  String?
+  roleOperatorRevokedAt        String?
+  deletedAt                    String?
+  deletionReason               String?
+  purgeAt                      String?
+  createdAt                    String
+  updatedAt                    String  @default("")
+}
+
+model IdentityWorkspace {
+  id                 String  @id
+  name               String
+  billingEmail       String?
+  suspendedAt        String?
+  suspendedReason    String?
+  suspendedByUserId  String?
+  deletedAt          String?
+  deletionReason     String?
+  purgeAt            String?
+  createdAt          String
+  updatedAt          String  @default("")
+}
+
+model IdentityMembership {
+  workspaceId String
+  userId      String
+  role        String
+  createdAt   String
+
+  @@id([workspaceId, userId])
+  @@index([workspaceId])
+  @@index([userId])
+}
+
+model IdentitySession {
+  id                    String  @id
+  tokenHash             String  @unique // SHA-256 hash of the bearer token; plaintext is never persisted
+  userId                String
+  workspaceId           String
+  membershipUserId      String
+  membershipWorkspaceId String
+  membershipRole        String
+  sessionKind           String  @default("app") // "app" | "ops"
+  userAgent             String?
+  clientIpHash          String?
+  createdAt             String
+  lastSeenAt            String
+  expiresAt             String  @default("")
+  revokedAt             String?
+
+  @@index([userId])
+  @@index([workspaceId])
+}
+
+model IdentityCredentialToken {
+  id          String  @id
+  tokenHash   String  @unique // SHA-256 hash of token
+  userId      String?
+  purpose     String  // "email_verification" | "password_reset" | "magic_link" | "workspace_invitation"
+  metaJson    String?
+  createdAt   String
+  expiresAt   String
+  consumedAt  String?
+
+  @@index([tokenHash])
+}
+
+model IdentityAuthEvent {
+  id           String  @id
+  eventType    String
+  userId       String?
+  workspaceId  String?
+  actorRole    String?
+  clientIpHash String?
+  userAgent    String?
+  outcome      String  // "success" | "failure" | "rate_limited"
+  reason       String?
+  recordedAt   String
+
+  @@index([recordedAt])
+}
+
+model IdentityAuthLockout {
+  id           String  @id
+  key          String  // normalized email OR hashed IP
+  keyKind      String  // "email" | "ip"
+  failureCount Int
+  windowStart  String
+  lockedUntil  String?
+
+  @@unique([key, keyKind])
+}
+
+
+model EmailDispatch {
+  id                String   @id
+  idempotencyKey    String   @unique
+  to                String
+  templateKey       String
+  paramsJson        String
+  workspaceId       String?
+  userId            String?
+  status            String   // "pending" | "sent" | "failed" | "suppressed"
+  providerMessageId String?
+  errorCode         String?
+  errorMessage      String?
+  attemptCount      Int      @default(0)
+  createdAt         String
+  updatedAt         String
+  sentAt            String?
+
+  @@index([workspaceId])
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model EmailSuppression {
+  id              String   @id
+  emailAddress    String   @unique
+  reason          String   // "hard_bounce" | "invalid_email" | "spam" | "complaint" | "unsubscribe" | "manual"
+  occurredAt      String
+  providerEventId String?
+
+  @@index([emailAddress])
+}
+
+model EmailWebhookEvent {
+  id              String   @id
+  providerEventId String   @unique
+  eventType       String
+  occurredAt      String
+  recordedAt      String
+
+  @@index([providerEventId])
+}
+
+model Style {
+  id                 String         @id
+  name               String
+  latestVersionId    String?
+  publishedVersionId String?
+  createdAt          String
+  versions           StyleVersion[]
+}
+
+model StyleVersion {
+  id        String @id
+  styleId   String
+  version   Int
+  document  String
+  createdAt String
+
+  style Style @relation(fields: [styleId], references: [id], onDelete: Cascade)
+  @@index([styleId])
+}

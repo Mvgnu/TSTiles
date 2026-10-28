@@ -18,9 +18,15 @@ process.env.ADMIN_TOKEN = "admin-token";
 process.env.ALLOWED_ORIGINS = "https://example.com";
 process.env.NODE_ENV = "development";
 
-test("studio operations enforce admin auth", (): void => {
+function decodePreviewDocument(previewUrl: string): unknown {
+  const prefix = "data:application/json;charset=utf-8,";
+  assert.equal(previewUrl.startsWith(prefix), true);
+  return JSON.parse(decodeURIComponent(previewUrl.slice(prefix.length))) as unknown;
+}
+
+test("studio operations enforce admin auth", async (): Promise<void> => {
   try {
-    listStylesAdmin("bad-token");
+    await listStylesAdmin("bad-token");
     assert.fail("expected studio unauthorized");
   } catch (error) {
     assert.equal(error instanceof StudioError, true);
@@ -29,24 +35,32 @@ test("studio operations enforce admin auth", (): void => {
     }
   }
 
-  assert.throws(() => {
-    listStylesAdmin("bad-token-2");
+  await assert.rejects(async () => {
+    await listStylesAdmin("bad-token-2");
   }, /STUDIO_UNAUTHORIZED/);
 
-  assert.throws(() => {
-    updateStyleDraft("no-style", {
+  await assert.rejects(async () => {
+    await updateStyleDraft("no-style", {
       version: 8,
       sources: {},
       sprites: "/v1/styles/{styleId}/sprite",
       glyphs: "/v1/fonts/{fontstack}/{range}.pbf",
     }, "bad-token");
   }, /STUDIO_UNAUTHORIZED/);
+
+  await assert.rejects(async () => {
+    await listStylesAdmin(42 as unknown as string);
+  }, /STUDIO_UNAUTHORIZED/);
+
+  await assert.rejects(async () => {
+    await getStyleDraft("studio-style", { token: "admin-token" } as unknown as string);
+  }, /STUDIO_UNAUTHORIZED/);
 });
 
-test("studio flow creates draft, publishes, and exposes draft state", (): void => {
+test("studio flow creates draft, publishes, and exposes draft state", async (): Promise<void> => {
   const token = "Bearer admin-token";
 
-  const initial = createStyleVersion("studio-style", {
+  const initial = await createStyleVersion("studio-style", {
     version: 8,
     sources: {
       osm: {
@@ -58,13 +72,13 @@ test("studio flow creates draft, publishes, and exposes draft state", (): void =
     glyphs: "/v1/fonts/{fontstack}/{range}.pbf",
   });
 
-  const published = publishStyle("studio-style", initial.id, token);
+  const published = await publishStyle("studio-style", initial.id, token);
   assert.equal(published.versionId, initial.id);
 
-  const list = listStylesAdmin(token);
+  const list = await listStylesAdmin(token);
   assert.equal(list.some((entry) => entry.id === "studio-style"), true);
 
-  const draft = updateStyleDraft("studio-style", {
+  const draft = await updateStyleDraft("studio-style", {
     version: 8,
     sources: {
       osm: {
@@ -85,19 +99,20 @@ test("studio flow creates draft, publishes, and exposes draft state", (): void =
 
   assert.equal(draft.styleId, "studio-style");
   assert.equal(draft.versionId !== initial.id, true);
-  assert.equal(draft.previewUrl.includes("/v1/styles/studio-style/style.json"), true);
+  assert.deepEqual(decodePreviewDocument(draft.previewUrl), draft.document);
 
-  const fetchedDraft = getStyleDraft("studio-style", token);
+  const fetchedDraft = await getStyleDraft("studio-style", token);
   assert.equal(fetchedDraft.versionId, draft.versionId);
-  assert.equal(fetchedDraft.previewUrl.includes("/v1/styles/studio-style/style.json"), true);
+  assert.deepEqual(decodePreviewDocument(fetchedDraft.previewUrl), fetchedDraft.document);
   assert.equal(JSON.stringify(fetchedDraft.document), JSON.stringify(draft.document));
   assert.equal(JSON.stringify(fetchedDraft.document) === JSON.stringify(published.document), false);
+  assert.equal(fetchedDraft.previewUrl === published.previewUrl, false);
 });
 
-test("studio rejects invalid style docs on draft save", (): void => {
+test("studio rejects invalid style docs on draft save", async (): Promise<void> => {
   const token = "admin-token";
-  assert.throws(() => {
-    updateStyleDraft("studio-invalid", {
+  await assert.rejects(async () => {
+    await updateStyleDraft("studio-invalid", {
       version: "bad",
       sources: "missing-structure",
       sprites: "bad",
@@ -111,21 +126,25 @@ test("studio rejects invalid style docs on draft save", (): void => {
   }, /STUDIO_BAD_REQUEST/);
 });
 
-test("studio surfaces missing drafts as STUDIO_NOT_FOUND", (): void => {
+test("studio surfaces missing drafts as STUDIO_NOT_FOUND", async (): Promise<void> => {
   const token = "admin-token";
-  assert.throws(() => {
-    getStyleDraft("missing-style", token);
+  await assert.rejects(async () => {
+    await getStyleDraft("missing-style", token);
   }, /STUDIO_NOT_FOUND/);
 });
 
-test("studio rejects blank identifiers with STUDIO_BAD_REQUEST", (): void => {
+test("studio rejects blank identifiers with STUDIO_BAD_REQUEST", async (): Promise<void> => {
   const token = "admin-token";
-  assert.throws(() => {
-    getStyleDraft("   ", token);
+  await assert.rejects(async () => {
+    await getStyleDraft("   ", token);
   }, /STUDIO_BAD_REQUEST/);
 
-  assert.throws(() => {
-    updateStyleDraft("   ", {
+  await assert.rejects(async () => {
+    await getStyleDraft("foo/bar", token);
+  }, /STUDIO_BAD_REQUEST/);
+
+  await assert.rejects(async () => {
+    await updateStyleDraft("   ", {
       version: 8,
       sources: {
         osm: {
@@ -138,7 +157,69 @@ test("studio rejects blank identifiers with STUDIO_BAD_REQUEST", (): void => {
     }, token);
   }, /STUDIO_BAD_REQUEST/);
 
-  assert.throws(() => {
-    publishStyle("studio-style", "   ", token);
+  await assert.rejects(async () => {
+    await updateStyleDraft("studio\\draft", {
+      version: 8,
+      sources: {
+        osm: {
+          type: "vector",
+          url: "/v1/tiles/{z}/{x}/{y}.mvt?access_token={access_token}",
+        },
+      },
+      sprites: "/v1/styles/{styleId}/sprite",
+      glyphs: "/v1/fonts/{fontstack}/{range}.pbf",
+    }, token);
+  }, /STUDIO_BAD_REQUEST/);
+
+  await assert.rejects(async () => {
+    await updateStyleDraft("studio..draft", {
+      version: 8,
+      sources: {
+        osm: {
+          type: "vector",
+          url: "/v1/tiles/{z}/{x}/{y}.mvt?access_token={access_token}",
+        },
+      },
+      sprites: "/v1/styles/{styleId}/sprite",
+      glyphs: "/v1/fonts/{fontstack}/{range}.pbf",
+    }, token);
+  }, /STUDIO_BAD_REQUEST/);
+
+  await assert.rejects(async () => {
+    await publishStyle("studio-style", "   ", token);
+  }, /STUDIO_BAD_REQUEST/);
+
+  await assert.rejects(async () => {
+    await publishStyle("..", "version-1", token);
+  }, /STUDIO_BAD_REQUEST/);
+
+  await assert.rejects(async () => {
+    await publishStyle("studio-style", "version/1", token);
+  }, /STUDIO_BAD_REQUEST/);
+
+  await assert.rejects(async () => {
+    await publishStyle("studio-style", "version..1", token);
+  }, /STUDIO_BAD_REQUEST/);
+
+  await assert.rejects(async () => {
+    await getStyleDraft(42 as unknown as string, token);
+  }, /STUDIO_BAD_REQUEST/);
+
+  await assert.rejects(async () => {
+    await updateStyleDraft(42 as unknown as string, {
+      version: 8,
+      sources: {
+        osm: {
+          type: "vector",
+          url: "/v1/tiles/{z}/{x}/{y}.mvt?access_token={access_token}",
+        },
+      },
+      sprites: "/v1/styles/{styleId}/sprite",
+      glyphs: "/v1/fonts/{fontstack}/{range}.pbf",
+    }, token);
+  }, /STUDIO_BAD_REQUEST/);
+
+  await assert.rejects(async () => {
+    await publishStyle("studio-style", 42 as unknown as string, token);
   }, /STUDIO_BAD_REQUEST/);
 });

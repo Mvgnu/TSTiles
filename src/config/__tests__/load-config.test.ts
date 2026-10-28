@@ -1,17 +1,31 @@
 import { strict as assert } from "node:assert";
 import { ConfigError, ConfigErrorCode } from "../types";
-import { loadConfig, redactConfig } from "../load-config";
+import { loadConfig as loadRuntimeConfig, redactConfig } from "../load-config";
+import { DEVELOPMENT_ONLY_SECURITY_DEFAULTS } from "../security-secrets";
 
 type TestFunction = (name: string, fn: () => void | Promise<void>) => void;
 const test: TestFunction = ((globalThis as { test?: TestFunction }).test ?? ((_, fn) => {
   void fn();
 }));
 
+let testEnv: Record<string, string | undefined> = {};
+
+const loadConfig = () => loadRuntimeConfig(testEnv);
+
+const validAdminToken = "0U0EkjpQDrwm6YDVV4IKHrOBUk-OoDFtX16CH1CWN6A";
+const validCsrfKey = "0040eb7fc425136c97c36f23e6134959141821d5a74cb8f83eead0b6c862a0d3";
+const validIpHashKey = "0b95b959cb5e5eb8135341cc64fb31cd9bca225f445806667a56e680bfb162c1";
+const validMfaKey = "2c4b97e4c46f72900dd6eb20ed7cefb0d7f366ccf2275195fa2450c0072a334e";
+
 const resetConfigEnv = (env: Readonly<Record<string, string | undefined>>): void => {
   const baseEnv: Record<string, string | undefined> = {
     NODE_ENV: "development",
     OBJECT_STORE_BUCKET: "test-bucket",
-    ADMIN_TOKEN: "admin-token",
+    ADMIN_TOKEN: validAdminToken,
+    ADMIN_API_TOKEN: undefined,
+    CSRF_SIGNING_KEY: validCsrfKey,
+    IP_HASH_KEY: validIpHashKey,
+    MFA_ENCRYPTION_KEY: validMfaKey,
     ALLOWED_ORIGINS: "*",
     ALLOWED_TILES_TOKENS: "",
     OBJECT_STORE_MODE: "memory",
@@ -37,17 +51,10 @@ const resetConfigEnv = (env: Readonly<Record<string, string | undefined>>): void
     INGEST_EXPECTED_CHECKSUM: undefined,
     INGEST_MAX_SOURCE_BYTES: "10737418240",
   };
-  const mergedEnv: Record<string, string | undefined> = {
+  testEnv = {
     ...baseEnv,
     ...env,
   };
-  for (const [key, value] of Object.entries(mergedEnv)) {
-    if (value === undefined) {
-      Reflect.deleteProperty(process.env, key);
-      continue;
-    }
-    process.env[key as keyof typeof process.env] = value;
-  }
 };
 
 test("configuration loading and redaction", () => {
@@ -56,12 +63,14 @@ test("configuration loading and redaction", () => {
   assert.equal(config.environment, "development");
   assert.equal(config.storage.bucketName, "test-bucket");
   assert.equal(config.storage.mode, "memory");
-  assert.equal(config.security.adminToken, "admin-token");
+  assert.equal(config.security.adminToken, validAdminToken);
+  assert.equal(config.security.csrfSigningKey.length, 64);
+  assert.equal(config.security.ipHashKey.length, 64);
+  assert.equal(config.security.mfaEncryptionKey.length, 64);
   assert.equal(config.tileDeliveryPolicy.headEnabled, true);
   assert.equal(config.tileDeliveryPolicy.globalRequestBudgetPerMinute, 0);
   assert.equal(config.tileDeliveryPolicy.renderTimeoutMs, 15000);
   assert.equal(config.tileDeliveryPolicy.renderMaxConcurrent, 8);
-  assert.equal(config.tileDeliveryPolicy.renderBackend, "local");
   assert.equal(config.observability.enabled, true);
   assert.equal(config.ingestDefaults.snapshotId, "snapshot-latest");
   assert.equal(config.ingestDefaults.maxSourceBytes, 10 * 1024 * 1024 * 1024);
@@ -149,11 +158,49 @@ test("configuration loading and redaction", () => {
   resetConfigEnv({
     NODE_ENV: "production",
     OBJECT_STORE_MODE: undefined,
+  });
+  const prodDefaultMode = loadConfig();
+  assert.equal(prodDefaultMode.storage.mode, "filesystem");
+
+  resetConfigEnv({
+    NODE_ENV: "production",
+    OBJECT_STORE_MODE: "filesystem",
+  });
+  const explicitFilesystemMode = loadConfig();
+  assert.equal(explicitFilesystemMode.storage.mode, "filesystem");
+
+  resetConfigEnv({
+    NODE_ENV: "production",
+    OBJECT_STORE_MODE: "memory",
+  });
+  try {
+    loadConfig();
+    assert.fail("expected memory mode in production to be rejected");
+  } catch (error: unknown) {
+    assert.ok(error instanceof ConfigError);
+    assert.equal((error as ConfigError).code, ConfigErrorCode.INVALID_VALUE);
+  }
+
+  resetConfigEnv({
+    NODE_ENV: "staging",
+    OBJECT_STORE_MODE: "memory",
+  });
+  try {
+    loadConfig();
+    assert.fail("expected memory mode in staging to be rejected");
+  } catch (error: unknown) {
+    assert.ok(error instanceof ConfigError);
+    assert.equal((error as ConfigError).code, ConfigErrorCode.INVALID_VALUE);
+  }
+
+  resetConfigEnv({
+    NODE_ENV: "production",
+    OBJECT_STORE_MODE: "s3-compatible",
     OBJECT_STORE_ACCESS_KEY_ID: "akid",
     OBJECT_STORE_SECRET_ACCESS_KEY: "secret",
   });
-  const prodDefaultMode = loadConfig();
-  assert.equal(prodDefaultMode.storage.mode, "s3-compatible");
+  const explicitS3Mode = loadConfig();
+  assert.equal(explicitS3Mode.storage.mode, "s3-compatible");
 
   resetConfigEnv({
     OBJECT_STORE_MODE: "invalid-mode",
@@ -240,23 +287,6 @@ test("configuration loading and redaction", () => {
   assert.equal(withGlobalBudget.tileDeliveryPolicy.globalRequestBudgetPerMinute, 500);
 
   resetConfigEnv({
-    RENDER_BACKEND: "REMOTE",
-  });
-  const withRemoteRenderer = loadConfig();
-  assert.equal(withRemoteRenderer.tileDeliveryPolicy.renderBackend, "remote");
-
-  resetConfigEnv({
-    RENDER_BACKEND: "invalid-backend",
-  });
-  try {
-    loadConfig();
-    assert.fail("expected invalid RENDER_BACKEND to fail");
-  } catch (error: unknown) {
-    assert.ok(error instanceof ConfigError);
-    assert.equal((error as ConfigError).code, ConfigErrorCode.INVALID_VALUE);
-  }
-
-  resetConfigEnv({
     RENDER_TIMEOUT_MS: "0",
   });
   try {
@@ -335,6 +365,8 @@ test("configuration loading and redaction", () => {
   }
 
   resetConfigEnv({
+    NODE_ENV: "production",
+    OBJECT_STORE_MODE: "filesystem",
     ADMIN_TOKEN: undefined,
   });
   try {
@@ -344,6 +376,70 @@ test("configuration loading and redaction", () => {
     assert.ok(error instanceof ConfigError);
     assert.equal((error as ConfigError).code, ConfigErrorCode.SECRET_UNAVAILABLE);
   }
+
+  resetConfigEnv({
+    NODE_ENV: "development",
+    ADMIN_TOKEN: undefined,
+    CSRF_SIGNING_KEY: undefined,
+    IP_HASH_KEY: undefined,
+    MFA_ENCRYPTION_KEY: undefined,
+  });
+  const withDevelopmentOnlyDefaults = loadConfig();
+  assert.deepEqual(
+    {
+      adminToken: withDevelopmentOnlyDefaults.security.adminToken,
+      csrfSigningKey: withDevelopmentOnlyDefaults.security.csrfSigningKey,
+      ipHashKey: withDevelopmentOnlyDefaults.security.ipHashKey,
+      mfaEncryptionKey: withDevelopmentOnlyDefaults.security.mfaEncryptionKey,
+    },
+    DEVELOPMENT_ONLY_SECURITY_DEFAULTS,
+  );
+
+  for (const missingSecret of ["CSRF_SIGNING_KEY", "IP_HASH_KEY", "MFA_ENCRYPTION_KEY"] as const) {
+    resetConfigEnv({
+      NODE_ENV: "production",
+      OBJECT_STORE_MODE: "filesystem",
+      [missingSecret]: undefined,
+    });
+    assert.throws(
+      () => loadConfig(),
+      (error: unknown) =>
+        error instanceof ConfigError &&
+        error.code === ConfigErrorCode.SECRET_UNAVAILABLE &&
+        error.message.includes(missingSecret),
+    );
+  }
+
+  resetConfigEnv({
+    NODE_ENV: "production",
+    OBJECT_STORE_MODE: "filesystem",
+    ADMIN_TOKEN: "demo-admin-token",
+  });
+  assert.throws(
+    () => loadConfig(),
+    (error: unknown) => error instanceof ConfigError && error.code === ConfigErrorCode.INVALID_VALUE,
+  );
+
+  resetConfigEnv({
+    NODE_ENV: "production",
+    OBJECT_STORE_MODE: "filesystem",
+    ADMIN_TOKEN: undefined,
+    ADMIN_API_TOKEN: validAdminToken,
+  });
+  assert.equal(loadConfig().security.adminToken, validAdminToken);
+
+  resetConfigEnv({
+    NODE_ENV: "production",
+    OBJECT_STORE_MODE: "filesystem",
+    IP_HASH_KEY: validCsrfKey,
+  });
+  assert.throws(
+    () => loadConfig(),
+    (error: unknown) =>
+      error instanceof ConfigError &&
+      error.code === ConfigErrorCode.INVALID_VALUE &&
+      error.message.includes("distinct"),
+  );
 
   resetConfigEnv({
     NODE_ENV: "invalid-env",
@@ -365,6 +461,9 @@ test("configuration loading and redaction", () => {
   const withSecrets = loadConfig();
   const redacted = redactConfig(withSecrets);
   assert.equal(redacted.security.adminToken, "[redacted]");
+  assert.equal(redacted.security.csrfSigningKey, "[redacted]");
+  assert.equal(redacted.security.ipHashKey, "[redacted]");
+  assert.equal(redacted.security.mfaEncryptionKey, "[redacted]");
   assert.equal(redacted.security.allowedTokens.length, 2);
   assert.equal(redacted.security.allowedTokens.every((value) => value === "[redacted]"), true);
   assert.equal(redacted.storage.accessKeyId, "[redacted]");

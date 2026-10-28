@@ -3,6 +3,7 @@ import { isAuthorized } from "../auth/admin-auth";
 import {
   adminErrorResponse,
   adminJsonResponse,
+  normalizeAdminResourceId,
   type AdminRouteResponse,
   unauthorizedAdminResponse,
 } from "./response";
@@ -12,19 +13,19 @@ export async function adminPublishStyleVersionRoute(
   versionId: string,
   token: string,
 ): Promise<AdminRouteResponse> {
-  if (!isAuthorized(token)) {
+  if (!(await isAuthorized(token))) {
     return unauthorizedAdminResponse();
   }
-  const normalizedStyleId = styleId.trim();
-  if (normalizedStyleId.length === 0) {
-    return adminJsonResponse(400, { error: "styleId is required" });
+  const normalizedStyleId = normalizeAdminResourceId(styleId, "styleId");
+  if (typeof normalizedStyleId !== "string") {
+    return normalizedStyleId;
   }
-  const normalizedVersionId = versionId.trim();
-  if (normalizedVersionId.length === 0) {
-    return adminJsonResponse(400, { error: "versionId is required" });
+  const normalizedVersionId = normalizeAdminResourceId(versionId, "versionId");
+  if (typeof normalizedVersionId !== "string") {
+    return normalizedVersionId;
   }
   try {
-    const body = publishStyleVersionEndpoint(normalizedStyleId, normalizedVersionId, token);
+    const body = await publishStyleVersionEndpoint(normalizedStyleId, normalizedVersionId, token);
     return adminJsonResponse(200, body);
   } catch (error) {
     return adminErrorResponse(error, {

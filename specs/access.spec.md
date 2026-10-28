@@ -30,6 +30,15 @@ status: ready
 
 Owns request validation before vector/raster/static bytes are served.
 
+## Cross-Cutting Pointer
+
+Canonical: `specs/_cross_cutting.spec.md`. This domain does not render UI directly. Relevant cross-cutting effects for subagents:
+
+- **Workspace suspension propagation**: when a project token resolves to a project whose owning workspace is suspended (`IdentityWorkspace.suspendedAt IS NOT NULL`), `authorizeTileRequest` MUST deny with `ACCESS_WORKSPACE_SUSPENDED` (HTTP `403`). The deny payload includes `Retry-After: 0` and a `cache-control: no-store` directive so transient suspension state cannot poison shared caches.
+- **Workspace soft-delete propagation**: when a token resolves to a project whose owning workspace is soft-deleted (`IdentityWorkspace.deletedAt IS NOT NULL`), `authorizeTileRequest` MUST deny with `ACCESS_PROJECT_REVOKED`.
+- **Quota mapping**: metering `denyReason: workspace_suspended` maps to `ACCESS_WORKSPACE_SUSPENDED`; existing `rate_limit` and `quota` mappings retained.
+- **Customer vs operator surfaces**: access is purely the customer delivery surface (`/v1/*`). Operator routes (`/admin/*`, `/ops/*`) never reach this domain. Customer session cookies are never consulted here — access is token-only.
+
 ## Component Insertion Points
 
 - `src/domains/access/policies/origin-allowlist.ts`
@@ -48,6 +57,7 @@ Owns request validation before vector/raster/static bytes are served.
 - Outputs include `allow`, `denyReason`, and sanitized identity (`projectId:keyIdHash` fragment or `"anon"` fallback).
 - Validates request shape for `tiles`, `raster`, and `static` request families.
   Static map shape validation includes geographic bounds for lon/lat inputs (`lon: -180..180`, `lat: -85.05112878..85.05112878`).
+- Decoded raster/static style IDs reject path separators and traversal markers, including exact `.`.
 
 ## Owned Invariants
 
@@ -58,6 +68,11 @@ Owns request validation before vector/raster/static bytes are served.
 - CORS policy is derived from resolved project policy when `allowedOrigins` is configured, with global config as fallback.
 - Explicitly denied origins are emitted with `Access-Control-Allow-Origin: null` (unless wildcard policy is configured) to avoid permissive deny-response sharing.
 - `resolveAllowedOrigins` may derive project-scoped CORS from optional token context for preflight/OPTIONS without consuming quota units.
+- Exported auth and preflight-origin helpers honor `query.access_token` directly when `rawToken` is not pre-extracted, so browser-style query-token consumers stay inside the access-domain contract.
+- Query-token helpers fail closed on malformed runtime `access_token` array entries instead of leaking raw string-operation failures from direct callers.
+- Query-token helpers also fail closed on malformed non-array runtime `access_token` values; authorization returns `ACCESS_BAD_REQUEST`, while preflight-origin resolution falls back to the global allowlist instead of treating malformed token objects as valid project-scoped input.
+- The exported access authorization surface must fail closed on non-string runtime request paths with `ACCESS_BAD_REQUEST`, instead of leaking raw string-operation failures from direct callers.
+- The exported `buildCorsHeaders(...)` helper must fail closed on malformed runtime auth results, origin values, or `allowedOrigins` payloads, including blank allowlist entries, by returning restrictive CORS headers (`Access-Control-Allow-Origin: null`, `Cache-Control: no-store`) instead of leaking raw property-access or string-operation failures.
 - Access never logs raw API keys or raw token values.
 
 ## Error Taxonomy
@@ -83,8 +98,16 @@ Owns request validation before vector/raster/static bytes are served.
 ## Data Stores
 
 - Reads security config and token metadata.
-- Reads project/key identity and policy via `projects`.
-- Writes/reads fast quota counters via `metering`.
+- Reads project/key identity and policy via `projects` (Prisma-backed).
+- Writes/reads quota counters via `metering` (Prisma-backed).
+- Per-instance rolling rate-limit counters in process memory keyed by sanitized identity (or `clientIp` for anonymous traffic) used to enforce minute-window throttling at the edge.
+
+## SaaS Launch Baseline
+
+- Quota gating is delegated to the persistent metering buckets so customer-visible monthly allowances stay consistent across instances and process restarts.
+- The per-instance rate-limit counters are intentionally non-persistent and bounded; they enforce burst protection at the edge ahead of the persistent quota check, and are scoped per-identity (not per-anonymous-bucket) so anonymous abuse from one client cannot starve other anonymous traffic.
+- CORS policy is derived from the persistent project policy when a token is supplied (including for OPTIONS preflight) and falls back to the global `ALLOWED_ORIGINS` config when no token is present. Wildcard policy is supported only when explicitly configured.
+- Token redaction runs before any access decision is logged or surfaced; raw API tokens never appear in logs, traces, or deny payloads.
 
 ## Dependency Direction
 

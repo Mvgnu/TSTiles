@@ -1,23 +1,16 @@
 import { randomUUID } from "node:crypto";
+import { prisma } from "../../config/db";
 import type {
   StyleAssets,
   StyleDocument,
-  StyleId,
   StyleTemplateConfig,
   StyleInput,
   StyleListItem,
   StyleVersion,
-  StyleVersionId,
 } from "./types";
 import { StyleErrorCode, StyleError } from "./types";
 
-interface InternalStyleRecord {
-  name: string;
-  versions: Map<StyleVersionId, StyleVersion>;
-  latestVersionId: StyleVersionId | null;
-  publishedVersionId: StyleVersionId | null;
-  createdAt: string;
-}
+// Replaced Map-based internal structures with Prisma integration
 
 const TEMPLATED_TILE_PATH = /^\/?v1\/tiles\/\{z\}\/\{x\}\/\{y\}\.mvt(?:\?[^\s#]*)?$/;
 const TILE_TOKEN_PATTERN = /(^|[&?])access_token=\{access_token\}(?:&|$)/;
@@ -79,7 +72,7 @@ function validateSourceTileUrl(label: string, url: unknown): void {
 
 function validateSourceSourceObject(source: unknown, sourceName: string): void {
   if (sourceName.trim() === "") {
-    return;
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, "style source names must be non-empty");
   }
   if (!isRecord(source)) {
     throw buildError(StyleErrorCode.INVALID_DOCUMENT, `style source ${sourceName} must be an object`);
@@ -109,6 +102,9 @@ function validateSourceSourceObject(source: unknown, sourceName: string): void {
 }
 
 function validateSourceObject(sources: Record<string, unknown>): void {
+  if (Object.keys(sources).length === 0) {
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, "Style JSON must include at least one source");
+  }
   for (const [sourceName, source] of Object.entries(sources)) {
     validateSourceSourceObject(source, sourceName);
   }
@@ -138,7 +134,7 @@ function validateGlyphTemplate(glyphs: unknown): void {
   }
 }
 
-const styles = new Map<StyleId, InternalStyleRecord>();
+// Styles map removed in favor of SQLite Prisma models.
 
 function buildError(code: StyleErrorCode, message: string): StyleError {
   return new StyleError(code, message);
@@ -151,9 +147,37 @@ function normalizeStyleInput(input: unknown): StyleInput {
   return input;
 }
 
+function normalizeStoredSource(source: unknown): Record<string, unknown> | unknown {
+  if (!isRecord(source)) {
+    return source;
+  }
+  const normalized: Record<string, unknown> = { ...source };
+  const tileTemplate = normalized.url;
+  if (typeof tileTemplate === "string") {
+    normalized.tiles = [tileTemplate];
+    delete normalized.url;
+  }
+  return normalized;
+}
+
+function normalizeStoredStyleDocument(document: StyleInput): StyleDocument {
+  const normalized: Record<string, unknown> = {
+    ...document,
+  };
+  if (!isRecord(document.sources)) {
+    return normalized as StyleDocument;
+  }
+  const sources: Record<string, unknown> = {};
+  for (const [sourceName, source] of Object.entries(document.sources)) {
+    sources[sourceName] = normalizeStoredSource(source);
+  }
+  normalized.sources = sources;
+  return normalized as StyleDocument;
+}
+
 function cloneStyleDocument(document: StyleDocument): StyleDocument {
   try {
-    const serialized = JSON.stringify(document);
+    const serialized = JSON.stringify(normalizeStoredStyleDocument(document));
     const parsed = JSON.parse(serialized) as unknown;
     const normalized = normalizeStyleInput(parsed);
     assertValidStyleDocument(normalized);
@@ -173,40 +197,81 @@ function cloneStyleVersion(version: StyleVersion): StyleVersion {
   };
 }
 
-function normalizeRequiredIdentifier(value: string, field: string): string {
+function parseStoredStyleDocument(raw: string): StyleDocument {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, "stored style document is invalid");
+  }
+  const normalized = normalizeStyleInput(parsed);
+  assertValidStyleDocument(normalized);
+  return cloneStyleDocument(normalized);
+}
+
+function normalizeRequiredIdentifier(value: unknown, field: string): string {
+  if (typeof value !== "string") {
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, `${field} must be non-empty`);
+  }
   const normalized = value.trim();
   if (normalized.length === 0) {
     throw buildError(StyleErrorCode.INVALID_DOCUMENT, `${field} must be non-empty`);
   }
+  if (normalized.includes("/") || normalized.includes("\\") || normalized === "." || normalized.includes("..")) {
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, `${field} contains unsupported path characters`);
+  }
   return normalized;
 }
 
-function normalizeOptionalVersionIdentifier(value?: string): string | undefined {
+function normalizeOptionalVersionIdentifier(value?: unknown): string | undefined {
   if (value === undefined) {
     return undefined;
+  }
+  if (typeof value !== "string") {
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, "versionId must be non-empty");
   }
   const normalized = value.trim();
   if (normalized.length === 0) {
     throw buildError(StyleErrorCode.INVALID_DOCUMENT, "versionId must be non-empty");
   }
+  if (normalized.includes("/") || normalized.includes("\\") || normalized === "." || normalized.includes("..")) {
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, "versionId contains unsupported path characters");
+  }
   return normalized;
 }
 
 export function buildDefaultStyleTemplate(config: StyleTemplateConfig): StyleDocument {
-  const sourceName = config.sourceName?.trim() || "default";
-  const tilesTemplate = config.tilesTemplate?.trim() || "/v1/tiles/{z}/{x}/{y}.mvt?access_token={access_token}";
-  const spriteTemplate = config.spriteTemplate?.trim() || "/v1/styles/{styleId}/sprites/sprite";
-  const glyphTemplate = config.glyphTemplate?.trim() || "/v1/fonts/{fontstack}/{range}.pbf";
+  if (!isRecord(config)) {
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, "style template config must be an object");
+  }
+  const { sourceName, tilesTemplate, spriteTemplate, glyphTemplate } = config;
+  normalizeRequiredIdentifier(config.styleId, "styleId");
+  if (sourceName !== undefined && typeof sourceName !== "string") {
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, "sourceName must be a string");
+  }
+  if (tilesTemplate !== undefined && typeof tilesTemplate !== "string") {
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, "tilesTemplate must be a string");
+  }
+  if (spriteTemplate !== undefined && typeof spriteTemplate !== "string") {
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, "spriteTemplate must be a string");
+  }
+  if (glyphTemplate !== undefined && typeof glyphTemplate !== "string") {
+    throw buildError(StyleErrorCode.INVALID_DOCUMENT, "glyphTemplate must be a string");
+  }
+  const normalizedSourceName = sourceName?.trim() || "default";
+  const normalizedTilesTemplate = tilesTemplate?.trim() || "/v1/tiles/{z}/{x}/{y}.mvt?access_token={access_token}";
+  const normalizedSpriteTemplate = spriteTemplate?.trim() || "/v1/styles/{styleId}/sprites/sprite";
+  const normalizedGlyphTemplate = glyphTemplate?.trim() || "/v1/fonts/{fontstack}/{range}.pbf";
   return {
     version: 8,
     sources: {
-      [sourceName]: {
+      [normalizedSourceName]: {
         type: "vector",
-        tiles: [tilesTemplate],
+        tiles: [normalizedTilesTemplate],
       },
     },
-    sprites: spriteTemplate,
-    glyphs: glyphTemplate,
+    sprites: normalizedSpriteTemplate,
+    glyphs: normalizedGlyphTemplate,
     layers: [],
   };
 }
@@ -245,35 +310,104 @@ export function validateStyleDocument(style: unknown): {
   }
 }
 
-function getStyleRecord(styleId: string): InternalStyleRecord {
-  const record = styles.get(styleId);
+async function getStyleRecord(styleId: string) {
+  const record = await prisma.style.findUnique({
+    where: { id: styleId },
+    include: { versions: true },
+  });
   if (!record) {
     throw buildError(StyleErrorCode.NOT_FOUND, "Style not found");
   }
-  return record;
+  const normalized = normalizeStoredStyleRecord(record);
+  if (!normalized) {
+    throw buildError(StyleErrorCode.NOT_FOUND, "Style not found");
+  }
+  return normalized;
 }
 
-export function listStyles(): StyleListItem[] {
-  return [...styles.entries()].map(([id, style]) => ({
+function normalizeStyleListItemRow(value: unknown): StyleListItem | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const id = typeof value.id === "string" ? value.id.trim() : "";
+  const name = typeof value.name === "string" ? value.name.trim() : "";
+  const latestVersionId = value.latestVersionId;
+  const publishedVersionId = value.publishedVersionId;
+  if (id.length === 0 || name.length === 0) {
+    return null;
+  }
+  if (latestVersionId !== null && typeof latestVersionId !== "string") {
+    return null;
+  }
+  if (publishedVersionId !== null && publishedVersionId !== undefined && typeof publishedVersionId !== "string") {
+    return null;
+  }
+  return {
     id,
-    name: style.name,
-    latestVersionId: style.latestVersionId,
-    publishedVersionId: style.publishedVersionId ?? undefined,
-  }));
+    name,
+    latestVersionId,
+    publishedVersionId: publishedVersionId ?? undefined,
+  };
 }
 
-function ensureVersionExists(record: InternalStyleRecord, versionId: string): StyleVersion {
-  const version = record.versions.get(versionId);
-  if (!version) {
+function normalizeStoredStyleRecord(
+  value: unknown,
+): { readonly id: string; readonly name: string; readonly latestVersionId: string | null; readonly publishedVersionId: string | null } | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const id = typeof value.id === "string" ? value.id.trim() : "";
+  const name = typeof value.name === "string" ? value.name.trim() : "";
+  const latestVersionId = value.latestVersionId;
+  const publishedVersionId = value.publishedVersionId;
+  if (id.length === 0 || name.length === 0) {
+    return null;
+  }
+  if (latestVersionId !== null && typeof latestVersionId !== "string") {
+    return null;
+  }
+  if (publishedVersionId !== null && typeof publishedVersionId !== "string") {
+    return null;
+  }
+  return {
+    id,
+    name,
+    latestVersionId,
+    publishedVersionId,
+  };
+}
+
+export async function listStyles(): Promise<StyleListItem[]> {
+  const records = await prisma.style.findMany({
+    orderBy: [
+      { createdAt: "desc" },
+      { id: "asc" },
+    ],
+  });
+  return records
+    .map((style) => normalizeStyleListItemRow(style))
+    .filter((style): style is StyleListItem => style !== null);
+}
+
+async function ensureVersionExists(styleId: string, versionId: string): Promise<StyleVersion> {
+  const version = await prisma.styleVersion.findUnique({
+    where: { id: versionId },
+  });
+  if (!version || version.styleId !== styleId) {
     throw buildError(StyleErrorCode.VERSION_NOT_FOUND, "Style version not found");
   }
-  return version;
+  return {
+    id: version.id,
+    styleId: version.styleId,
+    createdAt: version.createdAt,
+    document: parseStoredStyleDocument(version.document),
+  };
 }
 
-export function getStyle(styleId: string, versionId?: string): StyleDocument {
+export async function getStyle(styleId: string, versionId?: string): Promise<StyleDocument> {
   const normalizedStyleId = normalizeRequiredIdentifier(styleId, "styleId");
   const normalizedVersionId = normalizeOptionalVersionIdentifier(versionId);
-  const record = getStyleRecord(normalizedStyleId);
+  const record = await getStyleRecord(normalizedStyleId);
   let targetVersion: string | null = record.latestVersionId;
   if (normalizedVersionId) {
     targetVersion = normalizedVersionId;
@@ -283,58 +417,81 @@ export function getStyle(styleId: string, versionId?: string): StyleDocument {
   if (!targetVersion) {
     throw buildError(StyleErrorCode.VERSION_NOT_FOUND, "No published style version");
   }
-  const version = ensureVersionExists(record, targetVersion);
+  const version = await ensureVersionExists(normalizedStyleId, targetVersion);
   return cloneStyleDocument(version.document);
 }
 
-export function createStyleVersion(styleId: string, input: unknown): StyleVersion {
+export async function createStyleVersion(styleId: string, input: unknown): Promise<StyleVersion> {
   const normalizedStyleId = normalizeRequiredIdentifier(styleId, "styleId");
   const document = normalizeStyleInput(input);
   assertValidStyleDocument(document);
   const storedDocument = cloneStyleDocument(document);
-  const existing = styles.get(normalizedStyleId);
   const createdAt = new Date().toISOString();
   const versionId = `${normalizedStyleId}-${randomUUID().slice(0, 8)}`;
-  const version: StyleVersion = {
+  
+  const versionData = {
     id: versionId,
     styleId: normalizedStyleId,
     createdAt,
+    document: JSON.stringify(storedDocument),
+  };
+
+  const createdVersion = await prisma.$transaction(async (transaction) => {
+    await transaction.style.upsert({
+      where: { id: normalizedStyleId },
+      update: {},
+      create: {
+        id: normalizedStyleId,
+        name: normalizedStyleId,
+        createdAt,
+      },
+    });
+    const versionCount = await transaction.styleVersion.count({ where: { styleId: normalizedStyleId } });
+    const version = await transaction.styleVersion.create({
+      data: {
+        ...versionData,
+        version: versionCount + 1,
+      },
+    });
+    await transaction.style.update({
+      where: { id: normalizedStyleId },
+      data: { latestVersionId: versionId },
+    });
+    return version;
+  });
+
+  return {
+    id: createdVersion.id,
+    styleId: createdVersion.styleId,
+    createdAt: createdVersion.createdAt,
     document: storedDocument,
   };
-  if (!existing) {
-    styles.set(normalizedStyleId, {
-      name: normalizedStyleId,
-      versions: new Map([[versionId, version]]),
-      latestVersionId: versionId,
-      publishedVersionId: null,
-      createdAt,
-    });
-    return cloneStyleVersion(version);
-  }
-  existing.versions.set(versionId, version);
-  existing.latestVersionId = versionId;
-  return cloneStyleVersion(version);
 }
 
-export function publishStyleVersion(styleId: string, versionId: string): StyleVersion {
+export async function publishStyleVersion(styleId: string, versionId: string): Promise<StyleVersion> {
   const normalizedStyleId = normalizeRequiredIdentifier(styleId, "styleId");
   const normalizedVersionId = normalizeRequiredIdentifier(versionId, "versionId");
-  const record = getStyleRecord(normalizedStyleId);
-  const version = ensureVersionExists(record, normalizedVersionId);
-  // Re-validate at publish boundary to guard against storage/state corruption.
+  const record = await getStyleRecord(normalizedStyleId);
+  const version = await ensureVersionExists(normalizedStyleId, normalizedVersionId);
   assertValidStyleDocument(version.document);
+  
   if (record.publishedVersionId === version.id) {
     throw buildError(StyleErrorCode.PUBLISH_CONFLICT, "Style version already published");
   }
-  record.publishedVersionId = version.id;
+  
+  await prisma.style.update({
+    where: { id: normalizedStyleId },
+    data: { publishedVersionId: version.id },
+  });
+  
   return cloneStyleVersion(version);
 }
 
-export function resolveStyleAssets(styleId: string, versionId?: string): StyleAssets {
+export async function resolveStyleAssets(styleId: string, versionId?: string): Promise<StyleAssets> {
   const normalizedStyleId = normalizeRequiredIdentifier(styleId, "styleId");
   const normalizedVersionId = normalizeOptionalVersionIdentifier(versionId);
-  getStyle(normalizedStyleId, normalizedVersionId);
-  const record = getStyleRecord(normalizedStyleId);
+  await getStyle(normalizedStyleId, normalizedVersionId); // validate existence
+  const record = await getStyleRecord(normalizedStyleId);
   const resolvedVersionId = normalizedVersionId ?? record.publishedVersionId ?? record.latestVersionId;
   if (!resolvedVersionId) {
     throw buildError(StyleErrorCode.VERSION_NOT_FOUND, "No style version");

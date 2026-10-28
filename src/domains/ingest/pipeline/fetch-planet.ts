@@ -57,8 +57,21 @@ async function fetchFromUrl(url: string, maxSourceBytes: number): Promise<Uint8A
 }
 
 async function fetchFromFile(url: string, maxSourceBytes: number): Promise<Uint8Array> {
-  const path = decodeURIComponent(url.replace(/^file:\/\//i, ""));
   try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "file:") {
+      throw new IngestError(IngestErrorCode.SOURCE_UNAVAILABLE, "unsupported file source");
+    }
+    if (parsed.username.length > 0 || parsed.password.length > 0) {
+      throw new IngestError(IngestErrorCode.SOURCE_UNAVAILABLE, "snapshot file URL must not include credentials");
+    }
+    if (parsed.hostname.length > 0) {
+      throw new IngestError(IngestErrorCode.SOURCE_UNAVAILABLE, "snapshot file URL must be local");
+    }
+    if (parsed.search.length > 0 || parsed.hash.length > 0) {
+      throw new IngestError(IngestErrorCode.SOURCE_UNAVAILABLE, "snapshot file URL must not include query or fragment data");
+    }
+    const path = decodeURIComponent(parsed.pathname);
     const fileStats = await stat(path);
     assertWithinSourceLimit(fileStats.size, maxSourceBytes);
     const content = await readFile(path);

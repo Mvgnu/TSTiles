@@ -1,5 +1,8 @@
 import { strict as assert } from "node:assert";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { handleTileRequest } from "../tile-api.service";
+import { tileRoute } from "../routes/tiles-route";
 import { getActiveArtifact, promoteArtifact, registerArtifact } from "../../artifact/artifact.service";
 import type { TileRequest } from "../types";
 import { createObjectStore, setCreateObjectStore } from "../../storage/storage.service";
@@ -20,35 +23,37 @@ process.env.NODE_ENV = "development";
 
 const originalCacheTtl = process.env.CACHE_TTL_SECONDS;
 const originalHeadEnabled = process.env.HEAD_ENABLED;
+const fixturePath = resolve(__dirname, "../../tile-resolver/__fixtures__/test_fixture_1.pmtiles");
 
 test("tile route handles auth/cache and returns proper responses", async (): Promise<void> => {
   const config = loadConfig(process.env);
   const store = createObjectStore(config);
-  await store.putObject("artifacts/artifact-a/tiles.pmtiles", new TextEncoder().encode("artifact-bytes"));
-  await store.putObject("artifacts/custom-artifact-a/tiles.pmtiles", new TextEncoder().encode("custom-key-bytes"));
-  registerArtifact({
-    id: "artifact-a",
+  const fixture = new Uint8Array(await readFile(fixturePath));
+  await store.putObject("artifacts/artifact-a/tiles.pmtiles", fixture, "application/vnd.pmtiles");
+  await store.putObject("artifacts/custom-artifact-a/tiles.pmtiles", fixture, "application/vnd.pmtiles");
+  await registerArtifact({
+    id: "tile-route-artifact-a",
     key: "artifacts/artifact-a/tiles.pmtiles",
     checksum: "dummy",
-    byteSize: 13,
+    byteSize: fixture.byteLength,
     createdAt: new Date().toISOString(),
     validated: true,
   });
-  promoteArtifact("artifact-a");
-  registerArtifact({
-    id: "artifact-custom",
+  await promoteArtifact("tile-route-artifact-a");
+  await registerArtifact({
+    id: "tile-route-artifact-custom",
     key: "artifacts/custom-artifact-a/tiles.pmtiles",
     checksum: "custom",
-    byteSize: 16,
+    byteSize: fixture.byteLength,
     createdAt: new Date().toISOString(),
     validated: true,
   });
 
-  const activeArtifact = getActiveArtifact().versionId;
+  const activeArtifact = (await getActiveArtifact()).versionId;
 
   const response = await handleTileRequest({
     method: "GET",
-    path: "/tiles/2/2/3.mvt",
+    path: "/tiles/0/0/0.mvt",
     headers: {
       origin: "https://example.com",
       authorization: "tile-token",
@@ -60,7 +65,7 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
 
   const responseWithPrefix = await handleTileRequest({
     method: "GET",
-    path: "/v1/tiles/2/2/3.mvt",
+    path: "/v1/tiles/0/0/0.mvt",
     headers: {
       origin: "https://example.com",
       authorization: "tile-token",
@@ -71,7 +76,7 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
 
   const withQuery = await handleTileRequest({
     method: "GET",
-    path: "/tiles/2/2/3.mvt?abc=1",
+    path: "/tiles/0/0/0.mvt?abc=1",
     headers: {
       origin: "https://example.com",
       authorization: "tile-token",
@@ -83,7 +88,7 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
   process.env.CACHE_TTL_SECONDS = "42";
   const responseWithDifferentCache = await handleTileRequest({
     method: "GET",
-    path: "/tiles/3/4/5.mvt",
+    path: "/tiles/0/0/0.mvt",
     headers: {
       origin: "https://example.com",
       authorization: "tile-token",
@@ -99,7 +104,7 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
   
   const mixedOrigin = await handleTileRequest({
     method: "GET",
-    path: "/tiles/2/2/3.mvt",
+    path: "/tiles/0/0/0.mvt",
     headers: {
       Origin: "https://example.com",
       authorization: "tile-token",
@@ -108,10 +113,10 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
   assert.equal(mixedOrigin.status, 200);
   assert.equal(mixedOrigin.headers["access-control-allow-origin"], "https://example.com");
 
-  promoteArtifact("artifact-custom");
+  await promoteArtifact("tile-route-artifact-custom");
   const customKeyResponse = await handleTileRequest({
     method: "GET",
-    path: "/tiles/2/2/3.mvt",
+    path: "/tiles/0/0/0.mvt",
     headers: {
       origin: "https://example.com",
       authorization: "tile-token",
@@ -121,7 +126,7 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
 
   const head = await handleTileRequest({
     method: "HEAD",
-    path: "/tiles/2/2/3.mvt",
+    path: "/tiles/0/0/0.mvt",
     headers: {
       origin: "https://example.com",
       authorization: "tile-token",
@@ -137,7 +142,7 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
   process.env.HEAD_ENABLED = "false";
   const headDisabled = await handleTileRequest({
     method: "HEAD",
-    path: "/tiles/2/2/3.mvt",
+    path: "/tiles/0/0/0.mvt",
     headers: {
       origin: "https://example.com",
       authorization: "tile-token",
@@ -149,7 +154,7 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
 
   const options = await handleTileRequest({
     method: "OPTIONS",
-    path: "/tiles/2/2/3.mvt",
+    path: "/tiles/0/0/0.mvt",
     headers: {
       origin: "https://example.com",
       authorization: "tile-token",
@@ -160,7 +165,7 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
 
   const optionsWithoutAuth = await handleTileRequest({
     method: "OPTIONS",
-    path: "/tiles/2/2/3.mvt",
+    path: "/tiles/0/0/0.mvt",
     headers: {
       origin: "https://example.com",
     },
@@ -168,16 +173,26 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
   assert.equal(optionsWithoutAuth.status, 204);
   assert.equal(optionsWithoutAuth.headers["access-control-allow-origin"], "https://example.com");
 
-  const tenantPreflightProject = createProject({
+  const optionsUppercaseOrigin = await handleTileRequest({
+    method: "OPTIONS",
+    path: "/tiles/0/0/0.mvt",
+    headers: {
+      ORIGIN: "https://example.com",
+    } as Record<string, string>,
+  });
+  assert.equal(optionsUppercaseOrigin.status, 204);
+  assert.equal(optionsUppercaseOrigin.headers["access-control-allow-origin"], "https://example.com");
+
+  const tenantPreflightProject = await createProject({
     name: "Tenant Preflight Tile Project",
     policy: {
       allowedOrigins: ["https://tenant.example"],
     },
   });
-  const tenantPreflightKey = rotateApiKey(tenantPreflightProject.id);
+  const tenantPreflightKey = await rotateApiKey(tenantPreflightProject.id);
   const optionsWithTenantToken = await handleTileRequest({
     method: "OPTIONS",
-    path: "/tiles/2/2/3.mvt",
+    path: "/tiles/0/0/0.mvt",
     query: {
       access_token: tenantPreflightKey.token,
     },
@@ -192,6 +207,156 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
     "origin,access-control-request-method,access-control-request-headers",
   );
 
+  const getWithPathToken = await handleTileRequest({
+    method: "GET",
+    path: `/tiles/0/0/0.mvt?access_token=${encodeURIComponent(tenantPreflightKey.token)}`,
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(getWithPathToken.status, 200);
+  assert.equal(getWithPathToken.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const getWithPathTokenAndSparseQuery = await handleTileRequest({
+    method: "GET",
+    path: `/tiles/0/0/0.mvt?access_token=${encodeURIComponent(tenantPreflightKey.token)}`,
+    query: {
+      access_token: undefined,
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(getWithPathTokenAndSparseQuery.status, 200);
+  assert.equal(getWithPathTokenAndSparseQuery.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const optionsWithPathToken = await handleTileRequest({
+    method: "OPTIONS",
+    path: `/tiles/0/0/0.mvt?access_token=${encodeURIComponent(tenantPreflightKey.token)}`,
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(optionsWithPathToken.status, 204);
+  assert.equal(optionsWithPathToken.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const optionsWithPathTokenAndSparseQuery = await handleTileRequest({
+    method: "OPTIONS",
+    path: `/tiles/0/0/0.mvt?access_token=${encodeURIComponent(tenantPreflightKey.token)}`,
+    query: {
+      access_token: undefined,
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(optionsWithPathTokenAndSparseQuery.status, 204);
+  assert.equal(optionsWithPathTokenAndSparseQuery.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const getWithMalformedArrayToken = await handleTileRequest({
+    method: "GET",
+    path: "/tiles/0/0/0.mvt",
+    query: {
+      access_token: [42 as unknown as string, tenantPreflightKey.token],
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(getWithMalformedArrayToken.status, 200);
+  assert.equal(getWithMalformedArrayToken.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const getWithBlankLeadingArrayToken = await handleTileRequest({
+    method: "GET",
+    path: "/tiles/0/0/0.mvt",
+    query: {
+      access_token: ["   ", tenantPreflightKey.token],
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(getWithBlankLeadingArrayToken.status, 200);
+  assert.equal(getWithBlankLeadingArrayToken.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const getWithMalformedScalarQuery = await handleTileRequest({
+    method: "GET",
+    path: "/tiles/0/0/0.mvt",
+    query: {
+      access_token: { token: tenantPreflightKey.token } as unknown as string,
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(getWithMalformedScalarQuery.status, 400);
+
+  const optionsWithMalformedArrayToken = await handleTileRequest({
+    method: "OPTIONS",
+    path: "/tiles/0/0/0.mvt",
+    query: {
+      access_token: [42 as unknown as string, tenantPreflightKey.token],
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(optionsWithMalformedArrayToken.status, 204);
+  assert.equal(optionsWithMalformedArrayToken.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const optionsWithBlankLeadingArrayToken = await handleTileRequest({
+    method: "OPTIONS",
+    path: "/tiles/0/0/0.mvt",
+    query: {
+      access_token: ["   ", tenantPreflightKey.token],
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(optionsWithBlankLeadingArrayToken.status, 204);
+  assert.equal(optionsWithBlankLeadingArrayToken.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const optionsWithMalformedScalarQuery = await handleTileRequest({
+    method: "OPTIONS",
+    path: "/tiles/0/0/0.mvt",
+    query: {
+      access_token: { token: tenantPreflightKey.token } as unknown as string,
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(optionsWithMalformedScalarQuery.status, 400);
+
+  const malformedRouteRequest = await tileRoute(
+    null as unknown as Parameters<typeof tileRoute>[0],
+  );
+  assert.equal(malformedRouteRequest.status, 400);
+  assert.equal(
+    new TextDecoder().decode(malformedRouteRequest.body ?? new Uint8Array()),
+    JSON.stringify({ error: "TILE_BAD_REQUEST" }),
+  );
+
+  const malformedRouteHeaders = await tileRoute({
+    method: "GET",
+    path: "/tiles/0/0/0.mvt",
+    headers: {
+      authorization: 42 as unknown as string,
+    },
+  });
+  assert.equal(malformedRouteHeaders.status, 400);
+
+  const malformedRouteQuery = await tileRoute({
+    method: "GET",
+    path: "/tiles/0/0/0.mvt",
+    query: {
+      access_token: [42 as unknown as string],
+    },
+    headers: {},
+  });
+  assert.equal(malformedRouteQuery.status, 400);
+
   const optionsBadPath = await handleTileRequest({
     method: "OPTIONS",
     path: "/tiles/bad",
@@ -201,6 +366,17 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
   });
   assert.equal(optionsBadPath.status, 400);
   assert.equal(optionsBadPath.headers["access-control-allow-origin"], "https://example.com");
+
+  const badRuntimePath = await handleTileRequest({
+    method: "GET",
+    path: 123 as unknown as string,
+    headers: {
+      origin: "https://example.com",
+      authorization: "tile-token",
+    },
+  });
+  assert.equal(badRuntimePath.status, 400);
+  assert.equal(new TextDecoder().decode(badRuntimePath.body ?? new Uint8Array()), JSON.stringify({ error: "TILE_BAD_REQUEST" }));
   assert.equal(optionsBadPath.headers["cache-control"], "no-store");
 
   const bad = await handleTileRequest({
@@ -229,7 +405,7 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
 
   const denied = await handleTileRequest({
     method: "GET",
-    path: "/tiles/2/2/3.mvt",
+    path: "/tiles/0/0/0.mvt",
     headers: {
       origin: "https://example.com",
     },
@@ -241,7 +417,7 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
   process.env.HEAD_ENABLED = "true";
   const deniedHead = await handleTileRequest({
     method: "HEAD",
-    path: "/tiles/2/2/3.mvt",
+    path: "/tiles/0/0/0.mvt",
     headers: {
       origin: "https://example.com",
     },
@@ -252,7 +428,7 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
 
   const originDenied = await handleTileRequest({
     method: "GET",
-    path: "/tiles/2/2/3.mvt",
+    path: "/tiles/0/0/0.mvt",
     headers: {
       origin: "https://other.example.com",
       authorization: "tile-token",
@@ -263,7 +439,7 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
 
   const badMethod = await handleTileRequest({
     method: "POST",
-    path: "/tiles/2/2/3.mvt",
+    path: "/tiles/0/0/0.mvt",
     headers: {
       origin: "https://example.com",
       authorization: "tile-token",
@@ -273,7 +449,7 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
   assert.equal(badMethod.headers["cache-control"], "no-store");
 
   const originalActiveArtifact = activeArtifact;
-  registerArtifact({
+  await registerArtifact({
     id: "missing-artifact-key",
     key: "artifacts/missing-artifact-key/tiles.pmtiles",
     checksum: "missing-checksum",
@@ -281,10 +457,10 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
     createdAt: new Date().toISOString(),
     validated: true,
   });
-  promoteArtifact("missing-artifact-key");
+  await promoteArtifact("missing-artifact-key");
   const missingArtifact = await handleTileRequest({
     method: "GET",
-    path: "/tiles/2/2/3.mvt",
+    path: "/tiles/0/0/0.mvt",
     headers: {
       origin: "https://example.com",
       authorization: "tile-token",
@@ -294,14 +470,14 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
   assert.equal(missingArtifact.headers["access-control-allow-origin"], "https://example.com");
   assert.equal(missingArtifact.headers["cache-control"], "no-store");
 
-  const tenantProject = createProject({
+  const tenantProject = await createProject({
     name: "Tenant Tile Project",
     policy: {
       allowedOrigins: ["https://tenant.example"],
     },
   });
-  const tenantKey = rotateApiKey(tenantProject.id);
-  registerArtifact({
+  const tenantKey = await rotateApiKey(tenantProject.id);
+  await registerArtifact({
     id: "tenant-missing-artifact-key",
     key: "artifacts/tenant-missing-artifact-key/tiles.pmtiles",
     checksum: "tenant-missing-checksum",
@@ -309,10 +485,10 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
     createdAt: new Date().toISOString(),
     validated: true,
   });
-  promoteArtifact("tenant-missing-artifact-key");
+  await promoteArtifact("tenant-missing-artifact-key");
   const tenantScopedFailure = await handleTileRequest({
     method: "GET",
-    path: "/tiles/2/2/3.mvt",
+    path: "/tiles/0/0/0.mvt",
     headers: {
       origin: "https://tenant.example",
       authorization: tenantKey.token,
@@ -337,9 +513,18 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
       throw new StorageError(StorageErrorCode.PRECONDITION_FAILED, "readonly");
     },
   }));
+  await registerArtifact({
+    id: "precondition-artifact",
+    key: "artifacts/precondition/tiles.pmtiles",
+    checksum: "precondition-checksum",
+    byteSize: fixture.byteLength,
+    createdAt: new Date().toISOString(),
+    validated: true,
+  });
+  await promoteArtifact("precondition-artifact");
   const preconditionFailure = await handleTileRequest({
     method: "GET",
-    path: "/tiles/2/2/3.mvt",
+    path: "/tiles/0/0/0.mvt",
     headers: {
       origin: "https://example.com",
       authorization: "tile-token",
@@ -351,7 +536,7 @@ test("tile route handles auth/cache and returns proper responses", async (): Pro
   setCreateObjectStore(undefined);
 
   if (originalActiveArtifact !== "missing-artifact-key") {
-    promoteArtifact(originalActiveArtifact);
+    await promoteArtifact(originalActiveArtifact);
   }
   if (originalHeadEnabled === undefined) {
     delete process.env.HEAD_ENABLED;

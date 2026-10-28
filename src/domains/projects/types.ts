@@ -41,8 +41,16 @@ export interface ProjectPolicy {
   readonly cache?: ProjectCachePolicy;
 }
 
+export interface ProjectPolicyInput {
+  readonly allowedOrigins?: readonly string[];
+  readonly allowedEndpoints?: Partial<AllowedEndpointPolicy>;
+  readonly quotas?: Partial<ProjectQuotaPolicy>;
+  readonly cache?: Partial<ProjectCachePolicy>;
+}
+
 export interface Project {
   readonly id: string;
+  readonly workspaceId: string;
   readonly name: string;
   readonly policy: ProjectPolicy;
   readonly planId: string;
@@ -68,10 +76,18 @@ export interface ProjectIdentity {
   readonly keyHash: string;
   readonly keyIdHash: string;
   readonly planId: string;
+  readonly workspaceId: string;
 }
 
 export interface ProjectCreationInput {
   readonly name: string;
-  readonly policy?: Partial<ProjectPolicy>;
+  readonly workspaceId?: string;
+  readonly policy?: ProjectPolicyInput;
+  readonly planId?: string;
+}
+
+export interface ProjectUpdateInput {
+  readonly name?: string;
+  readonly policy?: ProjectPolicyInput;
   readonly planId?: string;
 }

@@ -8,11 +8,11 @@ import {
 } from "./response";
 
 export async function controlPlaneHealthRoute(token?: string): Promise<AdminRouteResponse> {
-  if (!isAuthorized(token)) {
+  if (!(await isAuthorized(token))) {
     return unauthorizedAdminResponse();
   }
   try {
-    return adminJsonResponse(200, healthStatusEndpoint(token), "public, max-age=5");
+    return adminJsonResponse(200, await healthStatusEndpoint(token), "public, max-age=5");
   } catch (error) {
     return adminErrorResponse(error, {
       defaultStatus: 503,

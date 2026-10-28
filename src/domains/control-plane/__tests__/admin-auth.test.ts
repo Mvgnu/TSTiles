@@ -13,18 +13,19 @@ test("normalizeAdminToken trims and strips bearer prefix", (): void => {
   assert.equal(normalizeAdminToken("  Bearer admin-token  "), "admin-token");
 });
 
-test("isAuthorized accepts canonical and bearer admin token formats", (): void => {
+test("isAuthorized accepts canonical and bearer admin token formats", async (): Promise<void> => {
   process.env.OBJECT_STORE_BUCKET = "test-bucket";
   process.env.ADMIN_TOKEN = "admin-token";
   process.env.ALLOWED_ORIGINS = "*";
   process.env.ALLOWED_TILES_TOKENS = "";
   process.env.NODE_ENV = "development";
 
-  assert.equal(isAuthorized(undefined), false);
-  assert.equal(isAuthorized(""), false);
-  assert.equal(isAuthorized("wrong-token"), false);
-  assert.equal(isAuthorized("admin-token"), true);
-  assert.equal(isAuthorized("  admin-token  "), true);
-  assert.equal(isAuthorized("Bearer admin-token"), true);
-  assert.equal(isAuthorized(" bearer admin-token  "), true);
+  assert.equal(await isAuthorized(undefined), false);
+  assert.equal(await isAuthorized(""), false);
+  assert.equal(await isAuthorized("wrong-token"), false);
+  assert.equal(await isAuthorized("admin-token"), true);
+  assert.equal(await isAuthorized("  admin-token  "), true);
+  assert.equal(await isAuthorized("Bearer admin-token"), true);
+  assert.equal(await isAuthorized(" bearer admin-token  "), true);
 });
+

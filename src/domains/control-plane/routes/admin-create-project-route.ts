@@ -8,11 +8,11 @@ import {
 } from "./response";
 
 export async function adminCreateProjectRoute(token: string, input: unknown): Promise<AdminRouteResponse> {
-  if (!isAuthorized(token)) {
+  if (!(await isAuthorized(token))) {
     return unauthorizedAdminResponse();
   }
   try {
-    const body = createProjectEndpoint(input, token);
+    const body = await createProjectEndpoint(input, token);
     return adminJsonResponse(201, body);
   } catch (error) {
     return adminErrorResponse(error, {

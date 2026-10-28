@@ -1,8 +1,12 @@
+import { readFile, stat } from "node:fs/promises";
+import { resolve } from "node:path";
 import {
   getStyle,
   listStyles,
   resolveStyleAssets,
 } from "./styles.service";
+import { resolveArchiveProfile } from "../tile-resolver/tile-resolver.service";
+import type { ResolvedArchiveProfile } from "../tile-resolver/types";
 import { StyleError, StyleErrorCode, type StyleVersionId } from "./types";
 
 type HttpMethod = "GET" | "HEAD" | "OPTIONS";
@@ -11,12 +15,49 @@ export interface StyleRequest {
   readonly method: HttpMethod;
   readonly path: string;
   readonly query?: Readonly<Record<string, string | string[] | undefined>>;
+  readonly baseUrl?: string;
 }
 
 export interface StyleResponse {
   readonly status: number;
   readonly body?: Uint8Array | string;
   readonly headers: Record<string, string>;
+}
+
+function normalizeStyleRouteRequest(input: unknown): StyleRequest | null {
+  if (!isRecord(input)) {
+    return null;
+  }
+  if (typeof input.method !== "string" || typeof input.path !== "string") {
+    return null;
+  }
+  if (input.baseUrl !== undefined && typeof input.baseUrl !== "string") {
+    return null;
+  }
+  let query: StyleRequest["query"];
+  if (input.query !== undefined) {
+    if (!isRecord(input.query)) {
+      return null;
+    }
+    const entries: Array<[string, string | string[] | undefined]> = [];
+    for (const [key, value] of Object.entries(input.query)) {
+      if (
+        typeof value !== "string"
+        && value !== undefined
+        && !(Array.isArray(value) && value.every((entry) => typeof entry === "string"))
+      ) {
+        return null;
+      }
+      entries.push([key, value]);
+    }
+    query = Object.fromEntries(entries);
+  }
+  return {
+    method: input.method as StyleRequest["method"],
+    path: input.path,
+    query,
+    baseUrl: input.baseUrl,
+  };
 }
 
 interface ParsedStylePath {
@@ -34,14 +75,14 @@ function throwStyleRouteError(code: StyleErrorCode, details: string): never {
   throw new StyleError(code, details);
 }
 
-function getPublishedStyle(styleId: string): { styleId: string; document: ReturnType<typeof getStyle> } {
-  const record = listStyles().find((entry) => entry.id === styleId);
+async function getPublishedStyle(styleId: string): Promise<{ styleId: string; document: ReturnType<typeof getStyle> extends Promise<infer T> ? T : never }> {
+  const record = (await listStyles()).find((entry) => entry.id === styleId);
   if (!record || !record.publishedVersionId) {
     throwStyleRouteError(StyleErrorCode.NOT_FOUND, "Style not found");
   }
   return {
     styleId,
-    document: getStyle(styleId, record.publishedVersionId),
+    document: await getStyle(styleId, record.publishedVersionId),
   };
 }
 
@@ -49,6 +90,7 @@ const styleListRegex = /^\/(?:v1\/)?styles\/?$/;
 const styleJsonRegex = /^\/(?:v1\/)?styles\/([^/]+)\/style\.json$/;
 const spriteRegex = /^\/(?:v1\/)?styles\/([^/]+)\/sprites\/([^/]+)\.(png|json)$/;
 const fontRegex = /^\/(?:v1\/)?fonts\/([^/]+)\/([^/]+)\.pbf$/;
+const localStyleAssetRoot = resolve(process.cwd(), "assets/styles/seed");
 
 function normalizePath(path: string): string {
   const queryIndex = path.indexOf("?");
@@ -64,9 +106,222 @@ function buildCorsHeaders(): Record<string, string> {
   };
 }
 
+function parseQueryValue(query: StyleRequest["query"], key: string): string | undefined {
+  const raw = query?.[key];
+  if (Array.isArray(raw)) {
+    for (const entry of raw) {
+      const normalized = entry.trim();
+      if (normalized.length > 0) {
+        return normalized;
+      }
+    }
+    return undefined;
+  }
+  return typeof raw === "string" ? raw : undefined;
+}
+
+function resolveQuery(path: string, query: StyleRequest["query"]): Readonly<Record<string, string | string[] | undefined>> {
+  const queryIndex = path.indexOf("?");
+  if (queryIndex < 0) {
+    return query ?? {};
+  }
+  const parsed = new URLSearchParams(path.slice(queryIndex + 1));
+  const merged = new Map<string, string | string[] | undefined>();
+  for (const [key, value] of parsed.entries()) {
+    const existing = merged.get(key);
+    if (existing === undefined) {
+      merged.set(key, value);
+      continue;
+    }
+    if (Array.isArray(existing)) {
+      merged.set(key, [...existing, value]);
+      continue;
+    }
+    merged.set(key, [existing, value]);
+  }
+  for (const [key, value] of Object.entries(query ?? {})) {
+    if (value === undefined) {
+      continue;
+    }
+    merged.set(key, value);
+  }
+  return Object.fromEntries(merged);
+}
+
+function pickAccessToken(query: StyleRequest["query"]): string | undefined {
+  const candidate = parseQueryValue(query, "access_token") ?? parseQueryValue(query, "token");
+  const normalized = candidate?.trim();
+  return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+async function materializePublicStyleDocument(
+  styleId: string,
+  document: ReturnType<typeof getStyle> extends Promise<infer U> ? U : ReturnType<typeof getStyle>,
+  baseUrl?: string,
+  archiveProfile?: ResolvedArchiveProfile | null,
+): Promise<Record<string, unknown>> {
+  const publicDocument = JSON.parse(JSON.stringify(document)) as Record<string, unknown>;
+  const spriteValue = publicDocument.sprite;
+  const internalSpritesTemplate = publicDocument.sprites;
+  const assets = await resolveStyleAssets(styleId);
+  const currentGlyphs = publicDocument.glyphs;
+
+  if (
+    (typeof internalSpritesTemplate === "string" && typeof spriteValue !== "string")
+    || (typeof spriteValue === "string" && spriteValue.startsWith("/"))
+    || (typeof spriteValue === "string" && spriteValue.includes("basemaps-assets/sprites/"))
+  ) {
+    publicDocument.sprite = absolutizePublicUrl(baseUrl, assets.spritePng.replace(/\.png$/u, ""));
+  }
+  if (
+    currentGlyphs === undefined
+    || (typeof currentGlyphs === "string" && currentGlyphs.startsWith("/"))
+    || (typeof currentGlyphs === "string" && currentGlyphs.includes("basemaps-assets/fonts/"))
+  ) {
+    publicDocument.glyphs = absolutizePublicUrl(baseUrl, assets.glyphs);
+  }
+  const sources = publicDocument.sources;
+  if (isRecord(sources)) {
+    for (const sourceValue of Object.values(sources)) {
+      if (!isRecord(sourceValue)) {
+        continue;
+      }
+      if (Array.isArray(sourceValue.tiles)) {
+        sourceValue.tiles = sourceValue.tiles.map((tileUrl) => (
+          typeof tileUrl === "string" ? absolutizePublicUrl(baseUrl, tileUrl) : tileUrl
+        ));
+      }
+      if (typeof sourceValue.url === "string") {
+        sourceValue.url = absolutizePublicUrl(baseUrl, sourceValue.url);
+      }
+      if (sourceValue.type === "vector" && archiveProfile) {
+        if (typeof sourceValue.minzoom !== "number") {
+          sourceValue.minzoom = archiveProfile.minZoom;
+        }
+        if (typeof sourceValue.maxzoom !== "number") {
+          sourceValue.maxzoom = archiveProfile.maxZoom;
+        }
+      }
+    }
+  }
+  delete publicDocument.sprites;
+  return publicDocument;
+}
+
+async function encodeStyleDocumentResponse(
+  styleId: string,
+  document: ReturnType<typeof getStyle> extends Promise<infer V> ? V : never,
+  baseUrl?: string,
+  archiveProfile?: ResolvedArchiveProfile | null,
+  accessToken?: string,
+): Promise<string> {
+  const materialized = await materializePublicStyleDocument(styleId, document, baseUrl, archiveProfile);
+  const serialized = JSON.stringify(materialized);
+  if (accessToken) {
+    return serialized.replace(/\{access_token\}/g, encodeURIComponent(accessToken));
+  }
+  return serialized
+    .replace(/([?&])access_token=\{access_token\}(&?)/g, (_match, prefix: string, suffix: string) => {
+      if (prefix === "?" && suffix === "&") {
+        return "?";
+      }
+      if (prefix === "&" && suffix === "&") {
+        return "&";
+      }
+      return "";
+    })
+    .replace(/\?"/g, "\"")
+    .replace(/\?&/g, "?")
+    .replace(/&&/g, "&");
+}
+
+function styleResponseCacheControl(): string {
+  return "public, max-age=300";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizePublicBaseUrl(baseUrl: string): string {
+  try {
+    const parsed = new URL(baseUrl);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return parsed.origin;
+    }
+  } catch {
+    if (baseUrl.startsWith("/")) {
+      return "";
+    }
+  }
+  return "";
+}
+
+function absolutizePublicUrl(baseUrl: string | undefined, value: string): string {
+  if (!baseUrl || value.startsWith("http://") || value.startsWith("https://")) {
+    return value;
+  }
+  if (!value.startsWith("/")) {
+    return value;
+  }
+  return `${normalizePublicBaseUrl(baseUrl).replace(/\/+$/u, "")}${value}`;
+}
+
+function resolveSpriteVariant(styleId: string): string {
+  if (styleId === "style-dark") {
+    return "dark";
+  }
+  if (styleId === "style-black") {
+    return "black";
+  }
+  if (styleId === "style-grey") {
+    return "grayscale";
+  }
+  if (styleId === "style-white") {
+    return "white";
+  }
+  return "light";
+}
+
+function resolveSpriteAssetFile(styleId: string, spriteAssetName: string): string {
+  const variant = resolveSpriteVariant(styleId);
+  const resolvedAssetName = spriteAssetName.replace(/^sprite/u, variant);
+  return resolve(localStyleAssetRoot, "sprites", resolvedAssetName);
+}
+
+function resolveGlyphAssetFile(fontRequestName: string): string {
+  const separator = fontRequestName.lastIndexOf("/");
+  if (separator <= 0 || separator >= fontRequestName.length - 1) {
+    throwStyleRouteError(StyleErrorCode.BAD_REQUEST, "font path");
+  }
+  const fontstack = fontRequestName.slice(0, separator);
+  const range = fontRequestName.slice(separator + 1);
+  return resolve(localStyleAssetRoot, "fonts", fontstack, `${range}.pbf`);
+}
+
+async function readStaticAsset(filePath: string): Promise<Uint8Array> {
+  try {
+    return await readFile(filePath);
+  } catch {
+    throwStyleRouteError(StyleErrorCode.NOT_FOUND, "asset");
+  }
+}
+
+async function resolveStaticAssetLength(filePath: string): Promise<string> {
+  try {
+    const metadata = await stat(filePath);
+    return String(metadata.size);
+  } catch {
+    throwStyleRouteError(StyleErrorCode.NOT_FOUND, "asset");
+  }
+}
+
 function normalizePathSegment(value: string, field: string): string {
   const trimmed = value.trim();
   if (trimmed.length === 0) {
+    throwStyleRouteError(StyleErrorCode.BAD_REQUEST, field);
+  }
+  if (trimmed === "." || trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("..")) {
     throwStyleRouteError(StyleErrorCode.BAD_REQUEST, field);
   }
   return trimmed;
@@ -107,10 +362,12 @@ function parseStylePath(path: string): ParsedStylePath {
   const fontMatch = fontRegex.exec(normalized);
   if (fontMatch && fontMatch.length === 3) {
     try {
+      const fontstack = normalizePathSegment(decodeURIComponent(fontMatch[1] ?? ""), "fontstack");
+      const range = normalizePathSegment(fontMatch[2] ?? "", "range");
       return {
         family: "glyphs",
         styleId: "global-fonts",
-        name: `${decodeURIComponent(fontMatch[1] ?? "")}/${fontMatch[2] ?? ""}`,
+        name: `${fontstack}/${range}`,
       };
     } catch {
       throwStyleRouteError(StyleErrorCode.BAD_REQUEST, "font path");
@@ -135,10 +392,23 @@ function byteLengthUtf8(value: string): number {
 }
 
 export async function handleStyleRequest(input: StyleRequest): Promise<StyleResponse> {
-  const method = input.method;
+  const request = normalizeStyleRouteRequest(input);
+  if (!request) {
+    return {
+      status: 400,
+      body: encodeJsonError("STYLE_BAD_REQUEST"),
+      headers: {
+        ...buildCorsHeaders(),
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      },
+    };
+  }
+  const method = request.method;
+  const query = resolveQuery(request.path, request.query);
   try {
     if (method === "OPTIONS") {
-      parseStylePath(input.path);
+      parseStylePath(request.path);
       return {
         status: 204,
         headers: {
@@ -159,9 +429,9 @@ export async function handleStyleRequest(input: StyleRequest): Promise<StyleResp
       };
     }
 
-    const parsed = parseStylePath(input.path);
+    const parsed = parseStylePath(request.path);
     if (parsed.family === "list") {
-      const published = listStyles().filter((entry) => entry.publishedVersionId);
+      const published = (await listStyles()).filter((entry) => entry.publishedVersionId);
       const body = JSON.stringify(published);
       const contentLength = String(byteLengthUtf8(body));
       return {
@@ -179,8 +449,15 @@ export async function handleStyleRequest(input: StyleRequest): Promise<StyleResp
 
     if (parsed.family === "styleJson") {
       const styleId = parsed.styleId ?? "";
-      const { document: style } = getPublishedStyle(styleId);
-      const body = JSON.stringify(style);
+      const { document: style } = await getPublishedStyle(styleId);
+      const accessToken = pickAccessToken(query);
+      let archiveProfile: ResolvedArchiveProfile | null = null;
+      try {
+        archiveProfile = await resolveArchiveProfile();
+      } catch {
+        archiveProfile = null;
+      }
+      const body = await encodeStyleDocumentResponse(styleId, style, request.baseUrl, archiveProfile, accessToken);
       const contentLength = String(byteLengthUtf8(body));
       return {
         status: 200,
@@ -189,7 +466,7 @@ export async function handleStyleRequest(input: StyleRequest): Promise<StyleResp
           ...buildCorsHeaders(),
           "content-type": "application/json",
           "content-length": contentLength,
-          "cache-control": "public, max-age=300",
+          "cache-control": styleResponseCacheControl(),
           "x-style-id": styleId,
         },
       };
@@ -197,37 +474,36 @@ export async function handleStyleRequest(input: StyleRequest): Promise<StyleResp
 
     if (parsed.family === "sprite") {
       const styleId = parsed.styleId ?? "";
-      getPublishedStyle(styleId);
-      const isJson = (parsed.name?.endsWith(".json") ?? false);
-      const payload: Uint8Array | string = isJson
-        ? JSON.stringify({ sprites: "placeholder", name: parsed.name, styleId })
-        : new Uint8Array([0x50, 0x4e, 0x47]);
-      const contentLength = typeof payload === "string"
-        ? String(byteLengthUtf8(payload))
-        : String(payload.byteLength);
+      await getPublishedStyle(styleId);
+      const filePath = resolveSpriteAssetFile(styleId, parsed.name ?? "sprite.json");
+      const body = method === "HEAD" ? undefined : await readStaticAsset(filePath);
+      const contentLength = await resolveStaticAssetLength(filePath);
+      const contentType = (parsed.name?.endsWith(".json") ?? false) ? "application/json" : "image/png";
       return {
         status: 200,
-        body: method === "HEAD" ? undefined : payload,
+        body,
         headers: {
           ...buildCorsHeaders(),
-          "content-type": isJson ? "application/json" : "image/png",
+          "content-type": contentType,
           "content-length": contentLength,
           "cache-control": "public, max-age=3600",
           "x-style-id": styleId,
-          "x-style-version": resolveStyleAssets(styleId).versionId,
+          "x-style-version": (await resolveStyleAssets(styleId)).versionId,
         },
       };
     }
 
     if (parsed.family === "glyphs") {
-      const body = new TextEncoder().encode("glyph");
+      const filePath = resolveGlyphAssetFile(parsed.name ?? "");
+      const body = method === "HEAD" ? undefined : await readStaticAsset(filePath);
+      const contentLength = await resolveStaticAssetLength(filePath);
       return {
         status: 200,
-        body: method === "HEAD" ? undefined : body,
+        body,
         headers: {
           ...buildCorsHeaders(),
-          "content-type": "application/octet-stream",
-          "content-length": String(body.byteLength),
+          "content-type": "application/x-protobuf",
+          "content-length": contentLength,
           "cache-control": "public, max-age=3600",
           "x-font-stack": parsed.name ?? "default",
         },

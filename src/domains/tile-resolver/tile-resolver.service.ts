@@ -6,9 +6,9 @@ import { createObjectStore } from "../storage/storage.service";
 import { ArtifactError } from "../artifact/types";
 import { StorageError, StorageErrorCode } from "../storage/types";
 import { validateTileCoordinates as validateTileCoordinatesInternal } from "./pmtiles/coordinates";
-import { resolveTileByteRange } from "./pmtiles/directory-resolver";
-import { readTileRange } from "./pmtiles/range-reader";
+import { resolveArchiveProfile as resolveArchiveProfileFromSource, resolveArchiveTile } from "./pmtiles/archive-source";
 import {
+  type ResolvedArchiveProfile,
   ResolverError,
   ResolverErrorCode,
   type ResolveMetadataInput,
@@ -22,15 +22,30 @@ function throwResolverError(code: ResolverErrorCode, details?: string): never {
   throw new ResolverError(code, details);
 }
 
-function resolveArtifactRecord(artifactId?: string): ArtifactVersion {
-  const artifacts = listArtifacts();
-  const normalizedArtifactId = artifactId?.trim();
-  let targetId = normalizedArtifactId && normalizedArtifactId.length > 0
-    ? normalizedArtifactId
-    : undefined;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeArtifactId(value: unknown): string | undefined {
+  if (value !== undefined && typeof value !== "string") {
+    throwResolverError(ResolverErrorCode.ARTIFACT_UNAVAILABLE);
+  }
+  const normalized = value?.trim();
+  if (normalized === undefined || normalized.length === 0) {
+    return undefined;
+  }
+  if (normalized === "." || normalized.includes("/") || normalized.includes("\\") || normalized.includes("..")) {
+    throwResolverError(ResolverErrorCode.ARTIFACT_UNAVAILABLE);
+  }
+  return normalized;
+}
+
+async function resolveArtifactRecord(artifactId?: string): Promise<ArtifactVersion> {
+  const artifacts = await listArtifacts();
+  let targetId = normalizeArtifactId(artifactId);
   if (targetId === undefined) {
     try {
-      targetId = getActiveArtifact().versionId;
+      targetId = (await getActiveArtifact()).versionId;
     } catch {
       throwResolverError(ResolverErrorCode.ARTIFACT_UNAVAILABLE);
     }
@@ -40,6 +55,14 @@ function resolveArtifactRecord(artifactId?: string): ArtifactVersion {
     throwResolverError(ResolverErrorCode.ARTIFACT_UNAVAILABLE);
   }
   return artifact;
+}
+
+async function resolveActiveVersionId(fallbackArtifactId: string): Promise<string> {
+  try {
+    return (await getActiveArtifact()).versionId;
+  } catch {
+    return fallbackArtifactId;
+  }
 }
 
 function mapResolverFailure(error: unknown): never {
@@ -69,11 +92,14 @@ function mapResolverFailure(error: unknown): never {
   throwResolverError(ResolverErrorCode.ORIGIN_READ_FAILED);
 }
 
-function toTileCoordinates(input: ResolveVectorTileInput): TileCoordinates {
+function toTileCoordinates(input: unknown): TileCoordinates {
+  if (!isRecord(input)) {
+    throwResolverError(ResolverErrorCode.BAD_COORDINATES);
+  }
   const coordinates: TileCoordinates = {
-    z: input.z,
-    x: input.x,
-    y: input.y,
+    z: input.z as number,
+    x: input.x as number,
+    y: input.y as number,
   };
   const validation = validateTileCoordinatesInternal(coordinates);
   if (validation) {
@@ -92,39 +118,51 @@ export function validateTileCoordinates(value: unknown): ContractError | null {
 export async function resolveVectorTile(input: ResolveVectorTileInput): Promise<ResolvedTile> {
   try {
     const coordinates = toTileCoordinates(input);
-    const artifact = resolveArtifactRecord(input.artifactId);
+    const artifact = await resolveArtifactRecord(isRecord(input) ? input.artifactId as string | undefined : undefined);
     const config = loadConfig();
     const store = createObjectStore(config);
     const tilePath = `/tiles/${coordinates.z}/${coordinates.x}/${coordinates.y}.mvt`;
-    const metadata = await store.head(artifact.key);
-    const range = resolveTileByteRange(tilePath, metadata.size, config.tileDeliveryPolicy.maxRangeBytes);
-    const result = await readTileRange(store, artifact.key, range.start, range.end);
+    const result = await resolveArchiveTile(store, artifact, coordinates.z, coordinates.x, coordinates.y);
     return {
       artifactId: artifact.id,
       bytes: result.bytes,
       contentType: result.contentType,
-      etagSeed: result.etag,
+      etagSeed: result.etagSeed,
       byteLength: result.bytes.byteLength,
       key: `${artifact.key}:${tilePath}`,
       coordinates,
+    };
+  } catch (error: unknown) {
+    if (error instanceof Error && error.message === "PMTILES_TILE_NOT_FOUND") {
+      throwResolverError(ResolverErrorCode.TILE_NOT_FOUND);
+    }
+    mapResolverFailure(error);
+  }
+}
+
+export async function resolveMetadata(input: ResolveMetadataInput = {}): Promise<ResolvedMetadata> {
+  try {
+    const artifact = await resolveArtifactRecord(isRecord(input) ? input.artifactId as string | undefined : undefined);
+    const all = (await listArtifacts())
+      .map((entry) => entry.id)
+      .sort((left, right) => left.localeCompare(right));
+    return {
+      activeVersionId: await resolveActiveVersionId(artifact.id),
+      artifact,
+      availableVersions: all,
+      etagSeed: artifact.checksum,
     };
   } catch (error: unknown) {
     mapResolverFailure(error);
   }
 }
 
-export function resolveMetadata(input: ResolveMetadataInput = {}): ResolvedMetadata {
+export async function resolveArchiveProfile(input: ResolveMetadataInput = {}): Promise<ResolvedArchiveProfile> {
   try {
-    const artifact = resolveArtifactRecord(input.artifactId);
-    const all = listArtifacts()
-      .map((entry) => entry.id)
-      .sort((left, right) => left.localeCompare(right));
-    return {
-      activeVersionId: artifact.id,
-      artifact,
-      availableVersions: all,
-      etagSeed: artifact.checksum,
-    };
+    const artifact = await resolveArtifactRecord(isRecord(input) ? input.artifactId as string | undefined : undefined);
+    const config = loadConfig();
+    const store = createObjectStore(config);
+    return await resolveArchiveProfileFromSource(store, artifact);
   } catch (error: unknown) {
     mapResolverFailure(error);
   }

@@ -20,9 +20,16 @@ function parseStorageMode(
 ): RuntimeConfig["storage"]["mode"] {
   const normalized = value?.trim().toLowerCase();
   if (normalized === undefined || normalized.length === 0) {
-    return environment === "development" ? "memory" : "s3-compatible";
+    return environment === "development" ? "memory" : "filesystem";
   }
-  if (normalized === "memory" || normalized === "s3-compatible") {
+  if (normalized === "memory" || normalized === "filesystem" || normalized === "s3-compatible") {
+    if (normalized === "memory" && environment !== "development") {
+      throw new ConfigError(
+        ConfigErrorCode.INVALID_VALUE,
+        "OBJECT_STORE_MODE=memory is only supported in NODE_ENV=development",
+        `OBJECT_STORE_MODE=${normalized};NODE_ENV=${environment}`,
+      );
+    }
     return normalized;
   }
   throw new ConfigError(ConfigErrorCode.INVALID_VALUE, "Invalid object store mode", normalized);
@@ -87,19 +94,6 @@ function parseOptionalSha256(value: string | undefined, label: string): string |
   return lower;
 }
 
-function parseRenderBackend(value: string | undefined): "local" | "remote" {
-  if (value === undefined) {
-    return "local";
-  }
-  const normalized = value.trim().toLowerCase();
-  if (normalized.length === 0) {
-    return "local";
-  }
-  if (normalized === "local" || normalized === "remote") {
-    return normalized;
-  }
-  throw new ConfigError(ConfigErrorCode.INVALID_VALUE, "Invalid render backend", `RENDER_BACKEND=${value}`);
-}
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): RuntimeConfig {
   const environment = parseEnvironment(env.NODE_ENV);
@@ -108,9 +102,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const bucketName = env.OBJECT_STORE_BUCKET?.trim();
   if (!bucketName) {
     throw new ConfigError(ConfigErrorCode.MISSING_REQUIRED, "OBJECT_STORE_BUCKET is required");
-  }
-  if (!env.ADMIN_TOKEN || env.ADMIN_TOKEN.trim().length === 0) {
-    throw new ConfigError(ConfigErrorCode.SECRET_UNAVAILABLE, "ADMIN_TOKEN is required");
   }
   if (mode === "s3-compatible") {
     if (!env.OBJECT_STORE_ACCESS_KEY_ID || env.OBJECT_STORE_ACCESS_KEY_ID.trim().length === 0) {
@@ -123,8 +114,11 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
 
   let security: SecurityConfig;
   try {
-    security = parseSecurityConfig(env);
+    security = parseSecurityConfig(env, environment);
   } catch (error) {
+    if (error instanceof ConfigError) {
+      throw error;
+    }
     const message = error instanceof Error ? error.message : "Invalid security config";
     throw new ConfigError(ConfigErrorCode.INVALID_VALUE, message);
   }
@@ -159,7 +153,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       ),
       renderTimeoutMs: parsePositiveInteger(env.RENDER_TIMEOUT_MS, 15_000, "RENDER_TIMEOUT_MS"),
       renderMaxConcurrent: parseNonNegativeInteger(env.RENDER_MAX_CONCURRENT, 8, "RENDER_MAX_CONCURRENT"),
-      renderBackend: parseRenderBackend(env.RENDER_BACKEND),
     },
     observability,
     ingestDefaults: {
@@ -185,14 +178,11 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
 }
 
 export function redactConfig(input: RuntimeConfig): Omit<RuntimeConfig, "security" | "storage"> & {
-  readonly security: {
-    readonly adminToken: string;
-    readonly allowedOrigins: RuntimeConfig["security"]["allowedOrigins"];
-    readonly allowedTokens: RuntimeConfig["security"]["allowedTokens"];
-    readonly corsAllowCredentials: RuntimeConfig["security"]["corsAllowCredentials"];
-    readonly corsMaxAgeSeconds: RuntimeConfig["security"]["corsMaxAgeSeconds"];
-    readonly enableRateLimit: RuntimeConfig["security"]["enableRateLimit"];
-    readonly rateLimitMaxRequestsPerMinute: RuntimeConfig["security"]["rateLimitMaxRequestsPerMinute"];
+  readonly security: Omit<RuntimeConfig["security"], "adminToken" | "csrfSigningKey" | "ipHashKey" | "mfaEncryptionKey"> & {
+    readonly adminToken: "[redacted]";
+    readonly csrfSigningKey: "[redacted]";
+    readonly ipHashKey: "[redacted]";
+    readonly mfaEncryptionKey: "[redacted]";
   };
   readonly storage: {
     readonly mode: RuntimeConfig["storage"]["mode"];
@@ -213,6 +203,9 @@ export function redactConfig(input: RuntimeConfig): Omit<RuntimeConfig, "securit
     security: {
       ...input.security,
       adminToken: "[redacted]",
+      csrfSigningKey: "[redacted]",
+      ipHashKey: "[redacted]",
+      mfaEncryptionKey: "[redacted]",
       allowedTokens: input.security.allowedTokens.map(() => "[redacted]"),
     },
     tileDeliveryPolicy: input.tileDeliveryPolicy,

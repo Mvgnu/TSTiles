@@ -7,7 +7,7 @@ import {
   type TileMetadataResponse,
 } from "./types";
 import type { AuthorizeContext, HttpMethod } from "../../contracts/types";
-import { resolveMetadata, resolveVectorTile } from "../tile-resolver/tile-resolver.service";
+import { resolveArchiveProfile, resolveMetadata, resolveVectorTile } from "../tile-resolver/tile-resolver.service";
 import { ResolverError, ResolverErrorCode } from "../tile-resolver/types";
 import { buildTileCacheKey } from "./components/cache-key";
 import { buildTileHeaders } from "./components/response-headers";
@@ -28,6 +28,13 @@ function throwTileApiError(code: TileApiErrorCode): never {
   throw new TileApiError(code);
 }
 
+function normalizeRequestPath(path: unknown): string {
+  if (typeof path !== "string") {
+    throwTileApiError(TileApiErrorCode.BAD_REQUEST);
+  }
+  return path;
+}
+
 function encodeJsonError(error: string): Uint8Array {
   return new TextEncoder().encode(JSON.stringify({ error }));
 }
@@ -39,18 +46,87 @@ function mapAccessStatus(reason?: string): number {
       ? 429
     : reason === "ACCESS_ORIGIN_DENIED"
       ? 403
+    : reason === "ACCESS_WORKSPACE_SUSPENDED"
+      ? 403
+    : reason === "ACCESS_PROJECT_REVOKED"
+      ? 403
       : reason === "ACCESS_UNAUTHORIZED"
         ? 401
         : 400;
 }
 
 function resolveOrigin(input: Record<string, string | undefined>): string | undefined {
-  return input.origin ?? input.Origin;
+  const direct = input.origin;
+  if (typeof direct === "string") {
+    return direct;
+  }
+  for (const [key, value] of Object.entries(input)) {
+    if (key.toLowerCase() === "origin") {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 function normalizePath(path: string): string {
   const queryIndex = path.indexOf("?");
   return queryIndex >= 0 ? path.slice(0, queryIndex) : path;
+}
+
+function normalizeRuntimeQuery(
+  query: TileRequest["query"],
+): Readonly<Record<string, string | string[] | undefined>> {
+  if (query === undefined) {
+    return {};
+  }
+  if (typeof query !== "object" || query === null || Array.isArray(query)) {
+    throwTileApiError(TileApiErrorCode.BAD_REQUEST);
+  }
+  const normalized = new Map<string, string | string[] | undefined>();
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined || typeof value === "string") {
+      normalized.set(key, value);
+      continue;
+    }
+    if (Array.isArray(value)) {
+      normalized.set(
+        key,
+        value.filter((entry): entry is string => typeof entry === "string"),
+      );
+      continue;
+    }
+    throwTileApiError(TileApiErrorCode.BAD_REQUEST);
+  }
+  return Object.fromEntries(normalized);
+}
+
+function resolveQuery(path: string, query: TileRequest["query"]): Readonly<Record<string, string | string[] | undefined>> {
+  const normalizedQuery = normalizeRuntimeQuery(query);
+  const queryIndex = path.indexOf("?");
+  if (queryIndex < 0) {
+    return normalizedQuery;
+  }
+  const parsed = new URLSearchParams(path.slice(queryIndex + 1));
+  const merged = new Map<string, string | string[] | undefined>();
+  for (const [key, value] of parsed.entries()) {
+    const existing = merged.get(key);
+    if (existing === undefined) {
+      merged.set(key, value);
+      continue;
+    }
+    if (Array.isArray(existing)) {
+      merged.set(key, [...existing, value]);
+      continue;
+    }
+    merged.set(key, [existing, value]);
+  }
+  for (const [key, value] of Object.entries(normalizedQuery)) {
+    if (value === undefined) {
+      continue;
+    }
+    merged.set(key, value);
+  }
+  return Object.fromEntries(merged);
 }
 
 function stripV1Prefix(path: string): string {
@@ -92,9 +168,22 @@ function parseTilePath(path: string): { z: number; x: number; y: number } {
 function parseQueryValue(query: TileRequest["query"], key: string): string | undefined {
   const raw = query?.[key];
   if (Array.isArray(raw)) {
-    return raw[0];
+    for (const entry of raw) {
+      if (typeof entry !== "string") {
+        continue;
+      }
+      const normalized = entry.trim();
+      if (normalized.length > 0) {
+        return normalized;
+      }
+    }
+    return undefined;
   }
-  return raw;
+  if (typeof raw !== "string") {
+    return raw;
+  }
+  const normalized = raw.trim();
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 function pickAccessToken(query: TileRequest["query"]): string | undefined {
@@ -213,7 +302,6 @@ function mapMetadataResolverError(error: ResolverError, headers: Record<string, 
 }
 
 export async function handleTileRequest(input: TileRequest): Promise<TileResponse> {
-  const path = normalizePath(input.path);
   const headers = normalizeHeaderMap(input.headers);
   const origin = resolveOrigin(headers);
   let errorHeaders = {
@@ -222,11 +310,14 @@ export async function handleTileRequest(input: TileRequest): Promise<TileRespons
     "cache-control": "no-store",
   };
   try {
+    const rawPath = normalizeRequestPath(input.path);
+    const path = normalizePath(rawPath);
+    const query = resolveQuery(rawPath, input.query);
     const normalizedPath = stripV1Prefix(path);
     if (input.method === "OPTIONS") {
-      const allowedOrigins = resolveAllowedOrigins({
+      const allowedOrigins = await resolveAllowedOrigins({
         headers,
-        rawToken: pickAccessToken(input.query ?? {}),
+        rawToken: pickAccessToken(query),
       });
       const preflightHeaders = buildCorsHeaders(
         {
@@ -261,12 +352,12 @@ export async function handleTileRequest(input: TileRequest): Promise<TileRespons
     const config = loadConfig();
     assertTileMethod(input.method);
     assertHeadEnabled(input.method, config.tileDeliveryPolicy.headEnabled);
-    const auth = authorizeTileRequest({
+    const auth = await authorizeTileRequest({
       method: input.method,
       path: normalizedPath,
-      query: input.query ?? {},
+      query,
       headers,
-      rawToken: pickAccessToken(input.query ?? {}),
+      rawToken: pickAccessToken(query),
     } satisfies AuthorizeContext);
     const cors = buildCorsHeaders(auth, origin);
     errorHeaders = {
@@ -275,13 +366,18 @@ export async function handleTileRequest(input: TileRequest): Promise<TileRespons
       "cache-control": "no-store",
     };
     if (!auth.allow) {
+      const deniedHeaders: Record<string, string> = {
+        ...cors,
+        "content-type": "application/json",
+      };
+      if (auth.denyReason === "ACCESS_WORKSPACE_SUSPENDED") {
+        deniedHeaders["retry-after"] = "0";
+        deniedHeaders["cache-control"] = "no-store";
+      }
       return {
         status: mapAccessStatus(auth.denyReason),
         body: responseBodyForMethod(input.method, new TextEncoder().encode(JSON.stringify({ denied: true }))),
-        headers: {
-          ...cors,
-          "content-type": "application/json",
-        },
+        headers: deniedHeaders,
       };
     }
     const coords = parseTilePath(normalizedPath);
@@ -326,7 +422,6 @@ export async function handleTileRequest(input: TileRequest): Promise<TileRespons
 }
 
 export async function handleMetadataRequest(input: TileRequest): Promise<TileMetadataResponse> {
-  const path = normalizePath(input.path);
   const headers = normalizeHeaderMap(input.headers);
   const origin = resolveOrigin(headers);
   let errorHeaders = {
@@ -335,11 +430,14 @@ export async function handleMetadataRequest(input: TileRequest): Promise<TileMet
     "cache-control": "no-store",
   };
   try {
+    const rawPath = normalizeRequestPath(input.path);
+    const path = normalizePath(rawPath);
+    const query = resolveQuery(rawPath, input.query);
     const normalizedPath = stripV1Prefix(path);
     if (input.method === "OPTIONS") {
-      const allowedOrigins = resolveAllowedOrigins({
+      const allowedOrigins = await resolveAllowedOrigins({
         headers,
-        rawToken: pickAccessToken(input.query ?? {}),
+        rawToken: pickAccessToken(query),
       });
       const preflightHeaders = buildCorsHeaders(
         {
@@ -352,7 +450,7 @@ export async function handleMetadataRequest(input: TileRequest): Promise<TileMet
       if (normalizedPath !== metadataPath) {
         return {
           status: 400,
-          body: JSON.stringify({ error: TileApiErrorCode.BAD_COORDINATES }),
+          body: JSON.stringify({ error: TileApiErrorCode.BAD_REQUEST }),
           headers: {
             ...preflightHeaders,
             "content-type": "application/json",
@@ -372,12 +470,12 @@ export async function handleMetadataRequest(input: TileRequest): Promise<TileMet
     const config = loadConfig();
     assertTileMethod(input.method);
     assertHeadEnabled(input.method, config.tileDeliveryPolicy.headEnabled);
-    const auth = authorizeTileRequest({
+    const auth = await authorizeTileRequest({
       method: input.method,
       path: normalizedPath,
-      query: input.query ?? {},
+      query,
       headers,
-      rawToken: pickAccessToken(input.query ?? {}),
+      rawToken: pickAccessToken(query),
     } satisfies AuthorizeContext);
     const cors = buildCorsHeaders(auth, origin);
     errorHeaders = {
@@ -386,13 +484,18 @@ export async function handleMetadataRequest(input: TileRequest): Promise<TileMet
       "cache-control": "no-store",
     };
     if (!auth.allow) {
+      const deniedHeaders: Record<string, string> = {
+        ...cors,
+        "content-type": "application/json",
+      };
+      if (auth.denyReason === "ACCESS_WORKSPACE_SUSPENDED") {
+        deniedHeaders["retry-after"] = "0";
+        deniedHeaders["cache-control"] = "no-store";
+      }
       return {
         status: mapAccessStatus(auth.denyReason),
         body: responseBodyForMethod(input.method, JSON.stringify({ denied: true })),
-        headers: {
-          ...cors,
-          "content-type": "application/json",
-        },
+        headers: deniedHeaders,
       };
     }
     if (normalizedPath !== metadataPath) {
@@ -406,8 +509,17 @@ export async function handleMetadataRequest(input: TileRequest): Promise<TileMet
         },
       };
     }
-    const metadata = resolveMetadata();
-    const serialized = JSON.stringify(metadata);
+    const metadata = await resolveMetadata();
+    let archiveProfile = null;
+    try {
+      archiveProfile = await resolveArchiveProfile();
+    } catch {
+      archiveProfile = null;
+    }
+    const serialized = JSON.stringify({
+      ...metadata,
+      archiveProfile,
+    });
     const metadataLength = byteLengthUtf8(serialized);
     if (input.method === "HEAD") {
       return {
@@ -440,6 +552,13 @@ export async function handleMetadataRequest(input: TileRequest): Promise<TileMet
       return mapMetadataResolverError(error, errorHeaders, input.method);
     }
     if (error instanceof TileApiError) {
+      if (error.code === TileApiErrorCode.BAD_REQUEST) {
+        return {
+          status: 400,
+          body: responseBodyForMethod(input.method, JSON.stringify({ error: TileApiErrorCode.BAD_REQUEST })),
+          headers: errorHeaders,
+        };
+      }
       if (error.code === TileApiErrorCode.HEAD_DISABLED) {
         return {
           status: 405,
@@ -457,15 +576,24 @@ export async function handleMetadataRequest(input: TileRequest): Promise<TileMet
 }
 
 export async function handleHealthRequest(input: TileRequest): Promise<TileResponse> {
-  const path = normalizePath(input.path);
   const errorHeaders = {
     "content-type": "application/json",
     "cache-control": "no-store",
   };
   try {
+    const path = normalizePath(normalizeRequestPath(input.path));
     const normalizedPath = stripV1Prefix(path);
     if (normalizedPath !== healthPath && normalizedPath !== `${healthPath}/`) {
       throwTileApiError(TileApiErrorCode.HEALTH_NOT_FOUND);
+    }
+    if (input.method === "OPTIONS") {
+      return {
+        status: 204,
+        headers: {
+          allow: "GET,HEAD,OPTIONS",
+          "cache-control": "public, max-age=60",
+        },
+      };
     }
     if (input.method !== "GET" && input.method !== "HEAD") {
       throwTileApiError(TileApiErrorCode.HEALTH_BAD_REQUEST);
@@ -500,6 +628,13 @@ export async function handleHealthRequest(input: TileRequest): Promise<TileRespo
     };
   } catch (error) {
     if (error instanceof TileApiError) {
+      if (error.code === TileApiErrorCode.BAD_REQUEST) {
+        return {
+          status: 400,
+          body: responseBodyForMethod(input.method, encodeJsonError(TileApiErrorCode.HEALTH_BAD_REQUEST)),
+          headers: errorHeaders,
+        };
+      }
       if (error.code === TileApiErrorCode.HEALTH_NOT_FOUND) {
         return {
           status: 404,

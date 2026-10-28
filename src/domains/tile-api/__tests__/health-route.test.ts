@@ -1,5 +1,6 @@
 import { strict as assert } from "node:assert";
 import { handleHealthRequest } from "../tile-api.service";
+import { tileHealthRoute } from "../routes/health-route";
 
 type TestFunction = (name: string, fn: () => void | Promise<void>) => void;
 const test: TestFunction = ((globalThis as { test?: TestFunction }).test ?? ((_, fn) => {
@@ -59,9 +60,18 @@ test("health endpoint returns service status without auth", async (): Promise<vo
     path: "/health",
     headers: {},
   } as unknown as Parameters<typeof handleHealthRequest>[0]);
-  assert.equal(healthBadMethod.status, 400);
-  assert.equal(healthBadMethod.body instanceof Uint8Array, true);
-  assert.equal(healthBadMethod.headers["cache-control"], "no-store");
+  assert.equal(healthBadMethod.status, 204);
+  assert.equal(healthBadMethod.body, undefined);
+  assert.equal(healthBadMethod.headers.allow, "GET,HEAD,OPTIONS");
+  assert.equal(healthBadMethod.headers["cache-control"], "public, max-age=60");
+
+  const healthBadRuntimePath = await handleHealthRequest({
+    method: "GET",
+    path: 123 as unknown as string,
+    headers: {},
+  });
+  assert.equal(healthBadRuntimePath.status, 400);
+  assert.equal(healthBadRuntimePath.body instanceof Uint8Array, true);
 
   const healthBadPath = await handleHealthRequest({
     method: "GET",
@@ -80,4 +90,36 @@ test("health endpoint returns service status without auth", async (): Promise<vo
   assert.equal(healthBadPathHead.status, 404);
   assert.equal(healthBadPathHead.headers["cache-control"], "no-store");
   assert.equal(healthBadPathHead.body, undefined);
+
+  const malformedRouteRequest = await tileHealthRoute(
+    null as unknown as Parameters<typeof tileHealthRoute>[0],
+  );
+  assert.equal(malformedRouteRequest.status, 400);
+  assert.equal(
+    new TextDecoder().decode(malformedRouteRequest.body ?? new Uint8Array()),
+    JSON.stringify({ error: "HEALTH_BAD_REQUEST" }),
+  );
+
+  const malformedRouteHeaders = await tileHealthRoute({
+    method: "GET",
+    path: "/health",
+    headers: {
+      origin: 42 as unknown as string,
+    },
+  });
+  assert.equal(malformedRouteHeaders.status, 400);
+
+  const malformedRouteQuery = await tileHealthRoute({
+    method: "GET",
+    path: "/health",
+    query: {
+      probe: [42 as unknown as string],
+    },
+    headers: {},
+  });
+  assert.equal(malformedRouteQuery.status, 400);
+  assert.equal(
+    new TextDecoder().decode(malformedRouteQuery.body ?? new Uint8Array()),
+    JSON.stringify({ error: "HEALTH_BAD_REQUEST" }),
+  );
 });

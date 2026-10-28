@@ -30,7 +30,9 @@ export type DenyReason =
   | "ACCESS_ORIGIN_DENIED"
   | "ACCESS_RATE_LIMITED"
   | "ACCESS_QUOTA_EXCEEDED"
-  | "ACCESS_BAD_REQUEST";
+  | "ACCESS_BAD_REQUEST"
+  | "ACCESS_WORKSPACE_SUSPENDED"
+  | "ACCESS_PROJECT_REVOKED";
 
 export interface TileCoordinates {
   readonly z: number;
@@ -93,3 +95,15 @@ export interface IngestEvent {
   readonly validated: boolean;
   readonly timestamp: string;
 }
+
+export interface QuotaThresholdEvent {
+  readonly eventId: string;
+  readonly workspaceId: string;
+  readonly planId: string;
+  readonly thresholdPercent: 80 | 100;
+  readonly usagePercent: number;
+  readonly windowKind: "month";
+  readonly windowStart: string;
+  readonly recordedAt: string;
+}
+

@@ -9,6 +9,7 @@ import {
 import { CONTRACT_SCHEMA_VERSION } from "../../contracts/types";
 import { defaultPolicy } from "./analytics/slo-policy";
 import { dispatchAlert } from "./analytics/alerts";
+import { emitSloSignalToSink } from "./analytics/log-sink";
 import { loadConfig } from "../../config/load-config";
 
 const windows = new Map<string, TileTrafficWindow>();
@@ -107,9 +108,11 @@ function validateSignal(signal: unknown): DeliverySignal {
     typeof originRead !== "boolean" ||
     typeof responseBytes !== "number" ||
     !Number.isFinite(responseBytes) ||
+    !Number.isInteger(responseBytes) ||
     responseBytes < 0 ||
     typeof latencyMs !== "number" ||
     !Number.isFinite(latencyMs) ||
+    !Number.isInteger(latencyMs) ||
     latencyMs < 0 ||
     typeof statusCode !== "number" ||
     !Number.isFinite(statusCode) ||
@@ -140,6 +143,12 @@ function validateSignal(signal: unknown): DeliverySignal {
 }
 
 function validatePolicy(policy: SLOThresholdPolicy): void {
+  if (!isRecord(policy)) {
+    throw new ObservabilityError(
+      ObservabilityErrorCode.SLO_THRESHOLD_MISCONFIGURED,
+      "Observability thresholds are invalid",
+    );
+  }
   if (
     !isSLOWindowNumber(policy.cacheWarnThreshold) ||
     !isSLOWindowNumber(policy.cacheCriticalThreshold) ||
@@ -163,10 +172,45 @@ function validatePolicy(policy: SLOThresholdPolicy): void {
   }
 }
 
+function validateWindowCounters(
+  window: Pick<TileTrafficWindow, "cacheHits" | "totalRequests" | "errors"> & Partial<Pick<TileTrafficWindow, "originReads">>,
+): void {
+  if (!isRecord(window)) {
+    throw new ObservabilityError(
+      ObservabilityErrorCode.SIGNAL_SCHEMA_INVALID,
+      "SLO window counters are invalid",
+    );
+  }
+  if (
+    !isSLOWindowNumber(window.cacheHits)
+    || !isSLOWindowNumber(window.totalRequests)
+    || !isSLOWindowNumber(window.errors)
+    || (window.originReads !== undefined && !isSLOWindowNumber(window.originReads))
+    || !Number.isInteger(window.cacheHits)
+    || !Number.isInteger(window.totalRequests)
+    || !Number.isInteger(window.errors)
+    || (window.originReads !== undefined && !Number.isInteger(window.originReads))
+    || window.cacheHits < 0
+    || window.totalRequests < 0
+    || window.errors < 0
+    || (window.originReads !== undefined && window.originReads < 0)
+    || window.cacheHits > window.totalRequests
+    || window.errors > window.totalRequests
+    || (window.originReads !== undefined && window.originReads > window.totalRequests)
+  ) {
+    throw new ObservabilityError(
+      ObservabilityErrorCode.SIGNAL_SCHEMA_INVALID,
+      "SLO window counters are invalid",
+    );
+  }
+}
+
 export function classifySLOBreach(
-  window: Pick<TileTrafficWindow, "cacheHits" | "totalRequests" | "errors">,
+  window: Pick<TileTrafficWindow, "cacheHits" | "totalRequests" | "errors"> & Partial<Pick<TileTrafficWindow, "originReads">>,
   policy: SLOThresholdPolicy = defaultPolicy(),
 ): SLOStatus {
+  validatePolicy(policy);
+  validateWindowCounters(window);
   if (window.totalRequests === 0) {
     return "ok";
   }
@@ -210,6 +254,26 @@ export function evaluateTileSLOs(signal: DeliverySignal): CacheHealthSignal {
     windowAgeMs: 0,
   };
 
+  if (validated.normalizedMethod === "OPTIONS") {
+    const status = classifySLOBreach(previous, config.observability);
+    return {
+      artifactVersion: validated.artifactVersion,
+      endpointGroup: previous.endpointGroup,
+      status,
+      cacheHitRatio: previous.totalRequests === 0 ? 0 : previous.cacheHits / previous.totalRequests,
+      errorRate: previous.totalRequests === 0 ? 0 : previous.errors / previous.totalRequests,
+      window: {
+        artifactVersion: previous.artifactVersion,
+        endpointGroup: previous.endpointGroup,
+        windowStart: previous.windowStart,
+        totalRequests: previous.totalRequests,
+        cacheHits: previous.cacheHits,
+        originReads: previous.originReads,
+        errors: previous.errors,
+      },
+    };
+  }
+
   const next: TileTrafficWindow = {
     ...previous,
     totalRequests: previous.totalRequests + 1,
@@ -244,5 +308,6 @@ export function evaluateTileSLOs(signal: DeliverySignal): CacheHealthSignal {
   } catch {
     // Alert delivery is best-effort and must not fail SLO computation.
   }
+  emitSloSignalToSink(config.observability.logSink, signalResult);
   return signalResult;
 }

@@ -8,11 +8,11 @@ import {
 } from "./response";
 
 export async function adminListArtifactsRoute(token: string): Promise<AdminRouteResponse> {
-  if (!isAuthorized(token)) {
+  if (!(await isAuthorized(token))) {
     return unauthorizedAdminResponse();
   }
   try {
-    return adminJsonResponse(200, listArtifactsEndpoint(token));
+    return adminJsonResponse(200, await listArtifactsEndpoint(token));
   } catch (error) {
     return adminErrorResponse(error, {
       defaultStatus: 503,

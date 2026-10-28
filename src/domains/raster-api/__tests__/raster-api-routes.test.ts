@@ -1,16 +1,23 @@
 import { strict as assert } from "node:assert";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { createStyleVersion, publishStyleVersion } from "../../styles/styles.service";
 import { handleRasterTileRequest, handleStaticMapRequest } from "../raster-api.service";
+import { rasterTileRoute } from "../routes/raster-route";
+import { staticMapRoute } from "../routes/static-route";
 import { promoteArtifact, registerArtifact } from "../../artifact/artifact.service";
 import { createObjectStore } from "../../storage/storage.service";
 import { loadConfig } from "../../../config/load-config";
 import type { RasterRequest } from "../types";
 import { createProject, rotateApiKey } from "../../projects/projects.service";
+import { isCartographicRendererAvailable } from "../../render/adapters/maplibre-native-renderer";
 
 type TestFunction = (name: string, fn: () => void | Promise<void>) => void;
 const test: TestFunction = ((globalThis as { test?: TestFunction }).test ?? ((_, fn) => {
   void fn();
 }));
+
+const RENDERER_AVAILABLE = isCartographicRendererAvailable();
 
 process.env.OBJECT_STORE_BUCKET = "test-bucket";
 process.env.ADMIN_TOKEN = "admin-token";
@@ -19,22 +26,32 @@ process.env.ALLOWED_TILES_TOKENS = "tile-token";
 process.env.NODE_ENV = "development";
 const originalHeadEnabled = process.env.HEAD_ENABLED;
 const originalCacheTtl = process.env.CACHE_TTL_SECONDS;
+const fixturePath = resolve(__dirname, "../../tile-resolver/__fixtures__/test_fixture_1.pmtiles");
 
 test("raster and static routes resolve and enforce request semantics", async (): Promise<void> => {
+  if (!RENDERER_AVAILABLE) {
+    // The full route test exercises real raster bytes through the maplibre
+    // pipeline. When the native binding isn't loadable in this test env
+    // (e.g. Node ABI without a prebuilt wheel), every successful raster
+    // call would 503; the routing/auth/CORS coverage is still exercised by
+    // the targeted "fails closed" test below.
+    return;
+  }
   const config = loadConfig(process.env);
   const store = createObjectStore(config);
-  await store.putObject("artifacts/raster-artifact/tiles.pmtiles", new TextEncoder().encode("artifact-bytes"));
-  registerArtifact({
+  const fixture = new Uint8Array(await readFile(fixturePath));
+  await store.putObject("artifacts/raster-artifact/tiles.pmtiles", fixture, "application/vnd.pmtiles");
+  await registerArtifact({
     id: "raster-artifact",
     key: "artifacts/raster-artifact/tiles.pmtiles",
     checksum: "raster-checksum",
-    byteSize: 14,
+    byteSize: fixture.byteLength,
     createdAt: new Date().toISOString(),
     validated: true,
   });
-  promoteArtifact("raster-artifact");
+  await promoteArtifact("raster-artifact");
 
-  const version = createStyleVersion("basic", {
+  const version = await createStyleVersion("basic", {
     version: 8,
     sources: {
       osm: {
@@ -43,11 +60,31 @@ test("raster and static routes resolve and enforce request semantics", async ():
       },
     },
   });
-  publishStyleVersion("basic", version.id);
+  await publishStyleVersion("basic", version.id);
+  const draftVersion = await createStyleVersion("basic", {
+    version: 8,
+    sources: {
+      osm: {
+        type: "vector",
+        url: "/v1/tiles/{z}/{x}/{y}.mvt?access_token={access_token}",
+      },
+    },
+    layers: [
+      {
+        id: "draft-layer",
+        type: "fill",
+        source: "osm",
+        "source-layer": "draft",
+        paint: {
+          "fill-color": "#ff6600",
+        },
+      },
+    ],
+  });
 
   const raster = await handleRasterTileRequest({
     method: "GET",
-    path: "/v1/raster/basic/2/2/3.png",
+    path: "/v1/raster/basic/0/0/0.png",
     headers: {
       origin: "https://example.com",
       authorization: "tile-token",
@@ -58,9 +95,23 @@ test("raster and static routes resolve and enforce request semantics", async ():
   assert.equal(raster.headers["x-raster-cache-key"].startsWith("raster:basic"), true);
   assert.equal(raster.headers["cache-control"], "public, max-age=300");
 
+  const rasterDraftVersion = await handleRasterTileRequest({
+    method: "GET",
+    path: `/v1/raster/basic/0/0/0.png?versionId=${encodeURIComponent(draftVersion.id)}`,
+    headers: {
+      origin: "https://example.com",
+      authorization: "tile-token",
+    },
+  });
+  assert.equal(rasterDraftVersion.status, 200);
+  // Version routing is observable through the cache key. The fixture may render
+  // identical pixels when a draft layer references a source layer absent from
+  // the tile, so byte inequality is not a stable assertion here.
+  assert.notEqual(rasterDraftVersion.headers["x-raster-cache-key"], raster.headers["x-raster-cache-key"]);
+
   const rasterHead = await handleRasterTileRequest({
     method: "HEAD",
-    path: "/v1/raster/basic/2/2/3.png",
+    path: "/v1/raster/basic/0/0/0.png",
     headers: {
       origin: "https://example.com",
       authorization: "tile-token",
@@ -72,7 +123,7 @@ test("raster and static routes resolve and enforce request semantics", async ():
   process.env.HEAD_ENABLED = "false";
   const rasterHeadDisabled = await handleRasterTileRequest({
     method: "HEAD",
-    path: "/v1/raster/basic/2/2/3.png",
+    path: "/v1/raster/basic/0/0/0.png",
     headers: {
       origin: "https://example.com",
       authorization: "tile-token",
@@ -84,7 +135,7 @@ test("raster and static routes resolve and enforce request semantics", async ():
 
   const staticHeadDisabled = await handleStaticMapRequest({
     method: "HEAD",
-    path: "/v1/static/basic/-122.4194,37.7749,12/640x480.webp",
+    path: "/v1/static/basic/0,0,0/640x480.webp",
     headers: {
       origin: "https://example.com",
       authorization: "tile-token",
@@ -98,7 +149,7 @@ test("raster and static routes resolve and enforce request semantics", async ():
 
   const rasterOptions = await handleRasterTileRequest({
     method: "OPTIONS",
-    path: "/v1/raster/basic/2/2/3.png",
+    path: "/v1/raster/basic/0/0/0.png",
     headers: {
       origin: "https://example.com",
       authorization: "tile-token",
@@ -108,7 +159,7 @@ test("raster and static routes resolve and enforce request semantics", async ():
 
   const rasterOptionsWithoutAuth = await handleRasterTileRequest({
     method: "OPTIONS",
-    path: "/v1/raster/basic/2/2/3.png",
+    path: "/v1/raster/basic/0/0/0.png",
     headers: {
       origin: "https://example.com",
     },
@@ -116,16 +167,26 @@ test("raster and static routes resolve and enforce request semantics", async ():
   assert.equal(rasterOptionsWithoutAuth.status, 204);
   assert.equal(rasterOptionsWithoutAuth.headers["access-control-allow-origin"], "https://example.com");
 
-  const tenantPreflightProject = createProject({
+  const rasterOptionsUppercaseOrigin = await handleRasterTileRequest({
+    method: "OPTIONS",
+    path: "/v1/raster/basic/0/0/0.png",
+    headers: {
+      ORIGIN: "https://example.com",
+    } as Record<string, string>,
+  });
+  assert.equal(rasterOptionsUppercaseOrigin.status, 204);
+  assert.equal(rasterOptionsUppercaseOrigin.headers["access-control-allow-origin"], "https://example.com");
+
+  const tenantPreflightProject = await createProject({
     name: "Tenant Preflight Raster Project",
     policy: {
       allowedOrigins: ["https://tenant.example"],
     },
   });
-  const tenantPreflightKey = rotateApiKey(tenantPreflightProject.id);
+  const tenantPreflightKey = await rotateApiKey(tenantPreflightProject.id);
   const rasterOptionsWithTenantToken = await handleRasterTileRequest({
     method: "OPTIONS",
-    path: "/v1/raster/basic/2/2/3.png",
+    path: "/v1/raster/basic/0/0/0.png",
     query: {
       access_token: tenantPreflightKey.token,
     },
@@ -140,15 +201,328 @@ test("raster and static routes resolve and enforce request semantics", async ():
     "origin,access-control-request-method,access-control-request-headers",
   );
 
+  const rasterWithPathToken = await handleRasterTileRequest({
+    method: "GET",
+    path: `/v1/raster/basic/0/0/0.png?access_token=${encodeURIComponent(tenantPreflightKey.token)}`,
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(rasterWithPathToken.status, 200);
+  assert.equal(rasterWithPathToken.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const rasterWithPathTokenAndSparseQuery = await handleRasterTileRequest({
+    method: "GET",
+    path: `/v1/raster/basic/0/0/0.png?access_token=${encodeURIComponent(tenantPreflightKey.token)}`,
+    query: {
+      access_token: undefined,
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(rasterWithPathTokenAndSparseQuery.status, 200);
+  assert.equal(rasterWithPathTokenAndSparseQuery.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const rasterOptionsWithPathToken = await handleRasterTileRequest({
+    method: "OPTIONS",
+    path: `/v1/raster/basic/0/0/0.png?access_token=${encodeURIComponent(tenantPreflightKey.token)}`,
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(rasterOptionsWithPathToken.status, 204);
+  assert.equal(rasterOptionsWithPathToken.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const rasterOptionsWithPathTokenAndSparseQuery = await handleRasterTileRequest({
+    method: "OPTIONS",
+    path: `/v1/raster/basic/0/0/0.png?access_token=${encodeURIComponent(tenantPreflightKey.token)}`,
+    query: {
+      access_token: undefined,
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(rasterOptionsWithPathTokenAndSparseQuery.status, 204);
+  assert.equal(rasterOptionsWithPathTokenAndSparseQuery.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const rasterWithMalformedArrayToken = await handleRasterTileRequest({
+    method: "GET",
+    path: "/v1/raster/basic/0/0/0.png",
+    query: {
+      access_token: [42 as unknown as string, tenantPreflightKey.token],
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(rasterWithMalformedArrayToken.status, 200);
+  assert.equal(rasterWithMalformedArrayToken.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const rasterWithBlankLeadingArrayToken = await handleRasterTileRequest({
+    method: "GET",
+    path: "/v1/raster/basic/0/0/0.png",
+    query: {
+      access_token: ["   ", tenantPreflightKey.token],
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(rasterWithBlankLeadingArrayToken.status, 200);
+  assert.equal(rasterWithBlankLeadingArrayToken.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const rasterWithMalformedScalarQuery = await handleRasterTileRequest({
+    method: "GET",
+    path: "/v1/raster/basic/0/0/0.png",
+    query: {
+      access_token: { token: tenantPreflightKey.token } as unknown as string,
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(rasterWithMalformedScalarQuery.status, 400);
+
+  const rasterOptionsWithMalformedArrayToken = await handleRasterTileRequest({
+    method: "OPTIONS",
+    path: "/v1/raster/basic/0/0/0.png",
+    query: {
+      access_token: [42 as unknown as string, tenantPreflightKey.token],
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(rasterOptionsWithMalformedArrayToken.status, 204);
+  assert.equal(rasterOptionsWithMalformedArrayToken.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const rasterOptionsWithBlankLeadingArrayToken = await handleRasterTileRequest({
+    method: "OPTIONS",
+    path: "/v1/raster/basic/0/0/0.png",
+    query: {
+      access_token: ["   ", tenantPreflightKey.token],
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(rasterOptionsWithBlankLeadingArrayToken.status, 204);
+  assert.equal(rasterOptionsWithBlankLeadingArrayToken.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const rasterOptionsWithMalformedScalarQuery = await handleRasterTileRequest({
+    method: "OPTIONS",
+    path: "/v1/raster/basic/0/0/0.png",
+    query: {
+      access_token: { token: tenantPreflightKey.token } as unknown as string,
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(rasterOptionsWithMalformedScalarQuery.status, 400);
+
+  const malformedRasterRoute = await rasterTileRoute(
+    null as unknown as Parameters<typeof rasterTileRoute>[0],
+  );
+  assert.equal(malformedRasterRoute.status, 400);
+  assert.equal(
+    new TextDecoder().decode(malformedRasterRoute.body ?? new Uint8Array()),
+    JSON.stringify({ error: "RASTER_BAD_REQUEST" }),
+  );
+
+  const malformedRasterHeaders = await rasterTileRoute({
+    method: "GET",
+    path: "/v1/raster/basic/0/0/0.png",
+    headers: {
+      authorization: 42 as unknown as string,
+    },
+  });
+  assert.equal(malformedRasterHeaders.status, 400);
+
+  const malformedRasterQuery = await rasterTileRoute({
+    method: "GET",
+    path: "/v1/raster/basic/0/0/0.png",
+    query: {
+      access_token: [42 as unknown as string],
+    },
+    headers: {},
+  });
+  assert.equal(malformedRasterQuery.status, 400);
+
+  const malformedStaticRoute = await staticMapRoute(
+    null as unknown as Parameters<typeof staticMapRoute>[0],
+  );
+  assert.equal(malformedStaticRoute.status, 400);
+  assert.equal(
+    new TextDecoder().decode(malformedStaticRoute.body ?? new Uint8Array()),
+    JSON.stringify({ error: "RASTER_BAD_REQUEST" }),
+  );
+
+  const malformedStaticHeaders = await staticMapRoute({
+    method: "GET",
+    path: "/v1/static/basic/0,0,0/640x480.png",
+    headers: {
+      authorization: 42 as unknown as string,
+    },
+  });
+  assert.equal(malformedStaticHeaders.status, 400);
+
+  const malformedStaticQuery = await staticMapRoute({
+    method: "GET",
+    path: "/v1/static/basic/0,0,0/640x480.png",
+    query: {
+      access_token: [42 as unknown as string],
+    },
+    headers: {},
+  });
+  assert.equal(malformedStaticQuery.status, 400);
+
   const staticOptionsWithoutAuth = await handleStaticMapRequest({
     method: "OPTIONS",
-    path: "/v1/static/basic/-122.4194,37.7749,12/640x480.webp",
+    path: "/v1/static/basic/0,0,0/640x480.webp",
     headers: {
       origin: "https://example.com",
     },
   });
   assert.equal(staticOptionsWithoutAuth.status, 204);
   assert.equal(staticOptionsWithoutAuth.headers["access-control-allow-origin"], "https://example.com");
+
+  const staticOptionsUppercaseOrigin = await handleStaticMapRequest({
+    method: "OPTIONS",
+    path: "/v1/static/basic/0,0,0/640x480.webp",
+    headers: {
+      ORIGIN: "https://example.com",
+    } as Record<string, string>,
+  });
+  assert.equal(staticOptionsUppercaseOrigin.status, 204);
+  assert.equal(staticOptionsUppercaseOrigin.headers["access-control-allow-origin"], "https://example.com");
+
+  const staticWithPathTokenAndOverlay = await handleStaticMapRequest({
+    method: "GET",
+    path: `/v1/static/basic/0,0,0/640x480.webp?access_token=${encodeURIComponent(tenantPreflightKey.token)}&overlays=poi,roads`,
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(staticWithPathTokenAndOverlay.status, 200);
+  assert.equal(staticWithPathTokenAndOverlay.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const staticWithPathTokenAndSparseQuery = await handleStaticMapRequest({
+    method: "GET",
+    path: `/v1/static/basic/0,0,0/640x480.webp?access_token=${encodeURIComponent(tenantPreflightKey.token)}&overlays=poi,roads`,
+    query: {
+      access_token: undefined,
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(staticWithPathTokenAndSparseQuery.status, 200);
+  assert.equal(staticWithPathTokenAndSparseQuery.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const staticOptionsWithPathToken = await handleStaticMapRequest({
+    method: "OPTIONS",
+    path: `/v1/static/basic/0,0,0/640x480.webp?access_token=${encodeURIComponent(tenantPreflightKey.token)}`,
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(staticOptionsWithPathToken.status, 204);
+  assert.equal(staticOptionsWithPathToken.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const staticOptionsWithPathTokenAndSparseQuery = await handleStaticMapRequest({
+    method: "OPTIONS",
+    path: `/v1/static/basic/0,0,0/640x480.webp?access_token=${encodeURIComponent(tenantPreflightKey.token)}`,
+    query: {
+      access_token: undefined,
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(staticOptionsWithPathTokenAndSparseQuery.status, 204);
+  assert.equal(staticOptionsWithPathTokenAndSparseQuery.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const staticWithMalformedArrayToken = await handleStaticMapRequest({
+    method: "GET",
+    path: "/v1/static/basic/0,0,0/640x480.webp",
+    query: {
+      access_token: [42 as unknown as string, tenantPreflightKey.token],
+      overlays: "poi,roads",
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(staticWithMalformedArrayToken.status, 200);
+  assert.equal(staticWithMalformedArrayToken.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const staticWithBlankLeadingArrayToken = await handleStaticMapRequest({
+    method: "GET",
+    path: "/v1/static/basic/0,0,0/640x480.webp",
+    query: {
+      access_token: ["   ", tenantPreflightKey.token],
+      overlays: "poi,roads",
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(staticWithBlankLeadingArrayToken.status, 200);
+  assert.equal(staticWithBlankLeadingArrayToken.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const staticWithMalformedScalarQuery = await handleStaticMapRequest({
+    method: "GET",
+    path: "/v1/static/basic/0,0,0/640x480.webp",
+    query: {
+      access_token: { token: tenantPreflightKey.token } as unknown as string,
+      overlays: "poi,roads",
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(staticWithMalformedScalarQuery.status, 400);
+
+  const staticOptionsWithMalformedArrayToken = await handleStaticMapRequest({
+    method: "OPTIONS",
+    path: "/v1/static/basic/0,0,0/640x480.webp",
+    query: {
+      access_token: [42 as unknown as string, tenantPreflightKey.token],
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(staticOptionsWithMalformedArrayToken.status, 204);
+  assert.equal(staticOptionsWithMalformedArrayToken.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const staticOptionsWithBlankLeadingArrayToken = await handleStaticMapRequest({
+    method: "OPTIONS",
+    path: "/v1/static/basic/0,0,0/640x480.webp",
+    query: {
+      access_token: ["   ", tenantPreflightKey.token],
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(staticOptionsWithBlankLeadingArrayToken.status, 204);
+  assert.equal(staticOptionsWithBlankLeadingArrayToken.headers["access-control-allow-origin"], "https://tenant.example");
+
+  const staticOptionsWithMalformedScalarQuery = await handleStaticMapRequest({
+    method: "OPTIONS",
+    path: "/v1/static/basic/0,0,0/640x480.webp",
+    query: {
+      access_token: { token: tenantPreflightKey.token } as unknown as string,
+    },
+    headers: {
+      origin: "https://tenant.example",
+    },
+  });
+  assert.equal(staticOptionsWithMalformedScalarQuery.status, 400);
 
   const rasterUnknown = await handleRasterTileRequest({
     method: "GET",
@@ -166,13 +540,13 @@ test("raster and static routes resolve and enforce request semantics", async ():
     assert.equal(parsed.error, "RASTER_STYLE_NOT_FOUND");
   }
 
-  const tenantProject = createProject({
+  const tenantProject = await createProject({
     name: "Tenant Raster Project",
     policy: {
       allowedOrigins: ["https://tenant.example"],
     },
   });
-  const tenantKey = rotateApiKey(tenantProject.id);
+  const tenantKey = await rotateApiKey(tenantProject.id);
   const tenantRasterUnknown = await handleRasterTileRequest({
     method: "GET",
     path: "/v1/raster/missing/2/2/3.png",
@@ -245,9 +619,54 @@ test("raster and static routes resolve and enforce request semantics", async ():
     assert.equal(parsed.error, "RASTER_BAD_COORDINATES");
   }
 
+  const rasterEncodedBackslashStyleId = await handleRasterTileRequest({
+    method: "GET",
+    path: "/v1/raster/foo%5Cbar/2/2/3.png",
+    headers: {
+      origin: "https://example.com",
+      authorization: "tile-token",
+    },
+  });
+  assert.equal(rasterEncodedBackslashStyleId.status, 400);
+  assert.equal(rasterEncodedBackslashStyleId.headers["cache-control"], "no-store");
+  if (rasterEncodedBackslashStyleId.body !== undefined) {
+    const parsed = JSON.parse(new TextDecoder().decode(rasterEncodedBackslashStyleId.body)) as { error?: string };
+    assert.equal(parsed.error, "RASTER_BAD_COORDINATES");
+  }
+
+  const rasterDotStyleId = await handleRasterTileRequest({
+    method: "GET",
+    path: "/v1/raster/%2E/2/2/3.png",
+    headers: {
+      origin: "https://example.com",
+      authorization: "tile-token",
+    },
+  });
+  assert.equal(rasterDotStyleId.status, 400);
+  assert.equal(rasterDotStyleId.headers["cache-control"], "no-store");
+  if (rasterDotStyleId.body !== undefined) {
+    const parsed = JSON.parse(new TextDecoder().decode(rasterDotStyleId.body)) as { error?: string };
+    assert.equal(parsed.error, "RASTER_BAD_COORDINATES");
+  }
+
+  const rasterTraversalStyleId = await handleRasterTileRequest({
+    method: "GET",
+    path: "/v1/raster/..%2Fsecret/2/2/3.png",
+    headers: {
+      origin: "https://example.com",
+      authorization: "tile-token",
+    },
+  });
+  assert.equal(rasterTraversalStyleId.status, 400);
+  assert.equal(rasterTraversalStyleId.headers["cache-control"], "no-store");
+  if (rasterTraversalStyleId.body !== undefined) {
+    const parsed = JSON.parse(new TextDecoder().decode(rasterTraversalStyleId.body)) as { error?: string };
+    assert.equal(parsed.error, "RASTER_BAD_COORDINATES");
+  }
+
   const staticMap = await handleStaticMapRequest({
     method: "GET",
-    path: "/v1/static/basic/-122.4194,37.7749,12/640x480.webp",
+    path: "/v1/static/basic/0,0,0/640x480.webp",
     headers: {
       origin: "https://example.com",
       authorization: "tile-token",
@@ -257,10 +676,21 @@ test("raster and static routes resolve and enforce request semantics", async ():
   assert.equal(typeof staticMap.headers["x-raster-cache-key"], "string");
   assert.equal(staticMap.headers["x-raster-cache-key"].startsWith("raster:basic"), true);
 
+  const staticMapDraftVersion = await handleStaticMapRequest({
+    method: "GET",
+    path: `/v1/static/basic/0,0,0/640x480.webp?versionId=${encodeURIComponent(draftVersion.id)}`,
+    headers: {
+      origin: "https://example.com",
+      authorization: "tile-token",
+    },
+  });
+  assert.equal(staticMapDraftVersion.status, 200);
+  assert.notEqual(staticMapDraftVersion.headers["x-raster-cache-key"], staticMap.headers["x-raster-cache-key"]);
+
   process.env.CACHE_TTL_SECONDS = "75";
   const staticMapCustomTtl = await handleStaticMapRequest({
     method: "GET",
-    path: "/v1/static/basic/-122.4194,37.7749,12/640x480.webp",
+    path: "/v1/static/basic/0,0,0/640x480.webp",
     headers: {
       origin: "https://example.com",
       authorization: "tile-token",
@@ -276,7 +706,7 @@ test("raster and static routes resolve and enforce request semantics", async ():
 
   const staticOverlaysFromArray = await handleStaticMapRequest({
     method: "GET",
-    path: "/v1/static/basic/-122.4194,37.7749,12/640x480.webp",
+    path: "/v1/static/basic/0,0,0/640x480.webp",
     query: {
       overlays: ["poi,roads", "roads,labels"],
     },
@@ -289,7 +719,7 @@ test("raster and static routes resolve and enforce request semantics", async ():
 
   const staticOverlaysFromString = await handleStaticMapRequest({
     method: "GET",
-    path: "/v1/static/basic/-122.4194,37.7749,12/640x480.webp",
+    path: "/v1/static/basic/0,0,0/640x480.webp",
     query: {
       overlays: "poi,roads,labels,roads",
     },
@@ -306,7 +736,7 @@ test("raster and static routes resolve and enforce request semantics", async ():
 
   const staticMapDecimalZoom = await handleStaticMapRequest({
     method: "GET",
-    path: "/v1/static/basic/-122.4194,37.7749,12.5/640x480.webp",
+    path: "/v1/static/basic/0,0,0.5/640x480.webp",
     headers: {
       origin: "https://example.com",
       authorization: "tile-token",
@@ -314,6 +744,36 @@ test("raster and static routes resolve and enforce request semantics", async ():
   });
   assert.equal(staticMapDecimalZoom.status, 200);
   assert.equal(typeof staticMapDecimalZoom.headers["x-raster-cache-key"], "string");
+
+  const staticZeroWidth = await handleStaticMapRequest({
+    method: "GET",
+    path: "/v1/static/basic/0,0,0/0x480.webp",
+    headers: {
+      origin: "https://example.com",
+      authorization: "tile-token",
+    },
+  });
+  assert.equal(staticZeroWidth.status, 400);
+  assert.equal(staticZeroWidth.headers["cache-control"], "no-store");
+  if (staticZeroWidth.body !== undefined) {
+    const payload = JSON.parse(new TextDecoder().decode(staticZeroWidth.body)) as { error?: string };
+    assert.equal(payload.error, "STATIC_BAD_REQUEST");
+  }
+
+  const staticZeroHeight = await handleStaticMapRequest({
+    method: "GET",
+    path: "/v1/static/basic/0,0,0/640x0.webp",
+    headers: {
+      origin: "https://example.com",
+      authorization: "tile-token",
+    },
+  });
+  assert.equal(staticZeroHeight.status, 400);
+  assert.equal(staticZeroHeight.headers["cache-control"], "no-store");
+  if (staticZeroHeight.body !== undefined) {
+    const payload = JSON.parse(new TextDecoder().decode(staticZeroHeight.body)) as { error?: string };
+    assert.equal(payload.error, "STATIC_BAD_REQUEST");
+  }
 
   const staticLatOutOfRange = await handleStaticMapRequest({
     method: "GET",
@@ -375,9 +835,54 @@ test("raster and static routes resolve and enforce request semantics", async ():
     assert.equal(payload.error, "STATIC_BAD_REQUEST");
   }
 
+  const staticEncodedBackslashStyleId = await handleStaticMapRequest({
+    method: "GET",
+    path: "/v1/static/foo%5Cbar/-122.4194,37.7749,12/640x480.webp",
+    headers: {
+      origin: "https://example.com",
+      authorization: "tile-token",
+    },
+  });
+  assert.equal(staticEncodedBackslashStyleId.status, 400);
+  assert.equal(staticEncodedBackslashStyleId.headers["cache-control"], "no-store");
+  if (staticEncodedBackslashStyleId.body !== undefined) {
+    const payload = JSON.parse(new TextDecoder().decode(staticEncodedBackslashStyleId.body)) as { error?: string };
+    assert.equal(payload.error, "STATIC_BAD_REQUEST");
+  }
+
+  const staticDotStyleId = await handleStaticMapRequest({
+    method: "GET",
+    path: "/v1/static/%2E/-122.4194,37.7749,12/640x480.webp",
+    headers: {
+      origin: "https://example.com",
+      authorization: "tile-token",
+    },
+  });
+  assert.equal(staticDotStyleId.status, 400);
+  assert.equal(staticDotStyleId.headers["cache-control"], "no-store");
+  if (staticDotStyleId.body !== undefined) {
+    const payload = JSON.parse(new TextDecoder().decode(staticDotStyleId.body)) as { error?: string };
+    assert.equal(payload.error, "STATIC_BAD_REQUEST");
+  }
+
+  const staticTraversalStyleId = await handleStaticMapRequest({
+    method: "GET",
+    path: "/v1/static/..%2Fsecret/-122.4194,37.7749,12/640x480.webp",
+    headers: {
+      origin: "https://example.com",
+      authorization: "tile-token",
+    },
+  });
+  assert.equal(staticTraversalStyleId.status, 400);
+  assert.equal(staticTraversalStyleId.headers["cache-control"], "no-store");
+  if (staticTraversalStyleId.body !== undefined) {
+    const payload = JSON.parse(new TextDecoder().decode(staticTraversalStyleId.body)) as { error?: string };
+    assert.equal(payload.error, "STATIC_BAD_REQUEST");
+  }
+
   const staticHead = await handleStaticMapRequest({
     method: "HEAD",
-    path: "/v1/static/basic/-122.4194,37.7749,12/640x480.webp",
+    path: "/v1/static/basic/0,0,0/640x480.webp",
     headers: {
       origin: "https://example.com",
       authorization: "tile-token",
@@ -388,7 +893,7 @@ test("raster and static routes resolve and enforce request semantics", async ():
 
   const staticOptions = await handleStaticMapRequest({
     method: "OPTIONS",
-    path: "/v1/static/basic/-122.4194,37.7749,12/640x480.webp",
+    path: "/v1/static/basic/0,0,0/640x480.webp",
     headers: {
       origin: "https://example.com",
       authorization: "tile-token",
@@ -473,6 +978,21 @@ test("raster and static routes resolve and enforce request semantics", async ():
     assert.equal(payload.error, "STATIC_BAD_REQUEST");
   }
 
+  const staticOptionsZeroWidth = await handleStaticMapRequest({
+    method: "OPTIONS",
+    path: "/v1/static/basic/-122.4194,37.7749,12/0x480.webp",
+    headers: {
+      origin: "https://example.com",
+      authorization: "tile-token",
+    },
+  });
+  assert.equal(staticOptionsZeroWidth.status, 400);
+  assert.equal(staticOptionsZeroWidth.headers["cache-control"], "no-store");
+  if (staticOptionsZeroWidth.body !== undefined) {
+    const payload = JSON.parse(new TextDecoder().decode(staticOptionsZeroWidth.body)) as { error?: string };
+    assert.equal(payload.error, "STATIC_BAD_REQUEST");
+  }
+
   const staticOptionsZoomTooHigh = await handleStaticMapRequest({
     method: "OPTIONS",
     path: "/v1/static/basic/-122.4194,37.7749,31/640x480.webp",
@@ -527,6 +1047,26 @@ test("raster and static routes resolve and enforce request semantics", async ():
   assert.equal(badMethod.status, 400);
   assert.equal(badMethod.headers["access-control-allow-origin"], "https://example.com");
   assert.equal(badMethod.headers["cache-control"], "no-store");
+  if (badMethod.body !== undefined) {
+    const payload = JSON.parse(new TextDecoder().decode(badMethod.body)) as { error?: string };
+    assert.equal(payload.error, "RASTER_BAD_REQUEST");
+  }
+
+  const staticBadMethod = await handleStaticMapRequest({
+    method: "POST" as unknown as RasterRequest["method"],
+    path: "/v1/static/basic/-122.4194,37.7749,12/640x480.png",
+    headers: {
+      origin: "https://example.com",
+      authorization: "tile-token",
+    },
+  } as unknown as Parameters<typeof handleStaticMapRequest>[0]);
+  assert.equal(staticBadMethod.status, 400);
+  assert.equal(staticBadMethod.headers["access-control-allow-origin"], "https://example.com");
+  assert.equal(staticBadMethod.headers["cache-control"], "no-store");
+  if (staticBadMethod.body !== undefined) {
+    const payload = JSON.parse(new TextDecoder().decode(staticBadMethod.body)) as { error?: string };
+    assert.equal(payload.error, "STATIC_BAD_REQUEST");
+  }
 
   const originalMaxConcurrent = process.env.RENDER_MAX_CONCURRENT;
   process.env.RENDER_MAX_CONCURRENT = "0";
@@ -614,4 +1154,52 @@ test("raster and static routes resolve and enforce request semantics", async ():
   } else {
     process.env.HEAD_ENABLED = originalHeadEnabled;
   }
+});
+
+test("raster route returns 503 when the maplibre native binding is unavailable", async (): Promise<void> => {
+  if (RENDERER_AVAILABLE) {
+    return;
+  }
+  // Seed the same valid state the full test does so tile resolution succeeds
+  // and the request actually reaches the render step (where the missing
+  // native binding raises BACKEND_UNAVAILABLE → 503). Without valid tile
+  // bytes the request would fail earlier at tile-resolver with 502 instead.
+  const config = loadConfig(process.env);
+  const store = createObjectStore(config);
+  const fixture = new Uint8Array(await readFile(fixturePath));
+  const artifactId = `unavailable-renderer-${Date.now()}`;
+  await store.putObject(`artifacts/${artifactId}/tiles.pmtiles`, fixture, "application/vnd.pmtiles");
+  await registerArtifact({
+    id: artifactId,
+    key: `artifacts/${artifactId}/tiles.pmtiles`,
+    checksum: `checksum-${artifactId}`,
+    byteSize: fixture.byteLength,
+    createdAt: new Date().toISOString(),
+    validated: true,
+  });
+  await promoteArtifact(artifactId);
+  const styleId = `unavailable-style-${Date.now()}`;
+  const version = await createStyleVersion(styleId, {
+    version: 8,
+    sources: {
+      osm: {
+        type: "vector",
+        url: "/v1/tiles/{z}/{x}/{y}.mvt?access_token={access_token}",
+      },
+    },
+    sprite: "/v1/styles/{styleId}/sprites/sprite",
+    glyphs: "/v1/fonts/{fontstack}/{range}.pbf",
+    layers: [],
+  });
+  await publishStyleVersion(styleId, version.id);
+  const response = await handleRasterTileRequest({
+    method: "GET",
+    path: `/v1/raster/${styleId}/0/0/0.png`,
+    headers: {
+      origin: "https://example.com",
+      authorization: "tile-token",
+    },
+  });
+  assert.equal(response.status, 503);
+  assert.equal(response.headers["cache-control"], "no-store");
 });

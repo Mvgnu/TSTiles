@@ -54,6 +54,13 @@ export interface ResolvedMetadata {
   readonly etagSeed: string;
 }
 
+export interface ResolvedArchiveProfile {
+  readonly minZoom: number;
+  readonly maxZoom: number;
+  readonly bounds: readonly [number, number, number, number];
+  readonly center: readonly [number, number, number];
+}
+
 export type ValidateTileCoordinates = (value: unknown) => ContractError | null;
 
 export interface ResolvedArtifactsInfo {

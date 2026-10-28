@@ -22,7 +22,7 @@ export function buildCorsHeaders(
         : "null";
   const headers: Record<string, string> = {
     "access-control-allow-methods": "GET,HEAD,OPTIONS",
-    "access-control-allow-headers": "authorization,content-type",
+    "access-control-allow-headers": "authorization,content-type,x-api-token",
     "access-control-allow-origin": allowOrigin,
     "access-control-max-age": String(config.security.corsMaxAgeSeconds),
     vary: "origin",
@@ -30,7 +30,7 @@ export function buildCorsHeaders(
   if (!input.allow) {
     headers["access-control-allow-origin"] = allowOrigin;
     headers["access-control-allow-methods"] = "GET,HEAD,OPTIONS";
-    headers["access-control-allow-headers"] = "authorization,content-type";
+    headers["access-control-allow-headers"] = "authorization,content-type,x-api-token";
     headers["cache-control"] = "no-store";
     return headers;
   }

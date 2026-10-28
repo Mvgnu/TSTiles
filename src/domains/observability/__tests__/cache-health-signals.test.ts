@@ -58,6 +58,107 @@ const emptyWindow = classifySLOBreach({
 });
 assert.equal(emptyWindow, "ok");
 
+let invalidCustomPolicyFailed = false;
+try {
+  classifySLOBreach(
+    {
+      cacheHits: 8,
+      totalRequests: 10,
+      errors: 0,
+    },
+    {
+      cacheWarnThreshold: 0.7,
+      cacheCriticalThreshold: 0.8,
+      errorWarnThreshold: 0.01,
+      errorCriticalThreshold: 0.03,
+    },
+  );
+} catch (error: unknown) {
+  invalidCustomPolicyFailed = true;
+  assert.ok(error instanceof ObservabilityError);
+  assert.equal((error as ObservabilityError).code, ObservabilityErrorCode.SLO_THRESHOLD_MISCONFIGURED);
+}
+assert.equal(invalidCustomPolicyFailed, true);
+
+let nonObjectPolicyFailed = false;
+try {
+  classifySLOBreach(
+    {
+      cacheHits: 8,
+      totalRequests: 10,
+      errors: 0,
+    },
+    42 as unknown as {
+      cacheWarnThreshold: number;
+      cacheCriticalThreshold: number;
+      errorWarnThreshold: number;
+      errorCriticalThreshold: number;
+    },
+  );
+} catch (error: unknown) {
+  nonObjectPolicyFailed = true;
+  assert.ok(error instanceof ObservabilityError);
+  assert.equal((error as ObservabilityError).code, ObservabilityErrorCode.SLO_THRESHOLD_MISCONFIGURED);
+}
+assert.equal(nonObjectPolicyFailed, true);
+
+let invalidWindowFailed = false;
+try {
+  classifySLOBreach({
+    cacheHits: 3,
+    totalRequests: 2,
+    errors: 0,
+  });
+} catch (error: unknown) {
+  invalidWindowFailed = true;
+  assert.ok(error instanceof ObservabilityError);
+  assert.equal((error as ObservabilityError).code, ObservabilityErrorCode.SIGNAL_SCHEMA_INVALID);
+}
+assert.equal(invalidWindowFailed, true);
+
+let nonObjectWindowFailed = false;
+try {
+  classifySLOBreach(null as unknown as {
+    cacheHits: number;
+    totalRequests: number;
+    errors: number;
+  });
+} catch (error: unknown) {
+  nonObjectWindowFailed = true;
+  assert.ok(error instanceof ObservabilityError);
+  assert.equal((error as ObservabilityError).code, ObservabilityErrorCode.SIGNAL_SCHEMA_INVALID);
+}
+assert.equal(nonObjectWindowFailed, true);
+
+let fractionalWindowFailed = false;
+try {
+  classifySLOBreach({
+    cacheHits: 1,
+    totalRequests: 2.5,
+    errors: 0,
+  });
+} catch (error: unknown) {
+  fractionalWindowFailed = true;
+  assert.ok(error instanceof ObservabilityError);
+  assert.equal((error as ObservabilityError).code, ObservabilityErrorCode.SIGNAL_SCHEMA_INVALID);
+}
+assert.equal(fractionalWindowFailed, true);
+
+let invalidOriginReadWindowFailed = false;
+try {
+  classifySLOBreach({
+    cacheHits: 1,
+    totalRequests: 1,
+    errors: 0,
+    originReads: 2,
+  });
+} catch (error: unknown) {
+  invalidOriginReadWindowFailed = true;
+  assert.ok(error instanceof ObservabilityError);
+  assert.equal((error as ObservabilityError).code, ObservabilityErrorCode.SIGNAL_SCHEMA_INVALID);
+}
+assert.equal(invalidOriginReadWindowFailed, true);
+
 const okWindow = evaluateTileSLOs({
   schemaVersion: 1,
   artifactVersion: "artifact-a",
@@ -188,6 +289,24 @@ const staticWindow = evaluateTileSLOs({
 });
 assert.equal(staticWindow.window.endpointGroup, "/static/{styleId}/{lon},{lat},{zoom}/{width}x{height}.{format}");
 
+const optionsWindow = evaluateTileSLOs({
+  schemaVersion: 1,
+  artifactVersion: "artifact-options",
+  tilePath: "/v1/tiles/metadata",
+  cacheStatus: "miss",
+  originRead: true,
+  responseBytes: 0,
+  latencyMs: 3,
+  statusCode: 204,
+  normalizedMethod: "OPTIONS",
+  receivedAt: "2026-01-01T00:13:30.000Z",
+});
+assert.equal(optionsWindow.window.endpointGroup, "/tiles/metadata");
+assert.equal(optionsWindow.window.totalRequests, 0);
+assert.equal(optionsWindow.window.cacheHits, 0);
+assert.equal(optionsWindow.window.originReads, 0);
+assert.equal(optionsWindow.window.errors, 0);
+
 let invalidSignalFailed = false;
 try {
   evaluateTileSLOs({
@@ -240,6 +359,27 @@ try {
   assert.equal((error as ObservabilityError).code, ObservabilityErrorCode.SIGNAL_SCHEMA_INVALID);
 }
 assert.equal(invalidPathShapeFailed, true);
+
+let fractionalSignalMeasureFailed = false;
+try {
+  evaluateTileSLOs({
+    schemaVersion: 1,
+    artifactVersion: "artifact-fractional-signal",
+    tilePath: "/tiles/1/2/3.mvt",
+    cacheStatus: "hit",
+    originRead: false,
+    responseBytes: 128.5,
+    latencyMs: 10.25,
+    statusCode: 200,
+    normalizedMethod: "GET",
+    receivedAt: "2026-01-01T00:14:30.000Z",
+  });
+} catch (error: unknown) {
+  fractionalSignalMeasureFailed = true;
+  assert.ok(error instanceof ObservabilityError);
+  assert.equal((error as ObservabilityError).code, ObservabilityErrorCode.SIGNAL_SCHEMA_INVALID);
+}
+assert.equal(fractionalSignalMeasureFailed, true);
 
 process.env.CACHE_WARN_THRESHOLD = "0.5";
 process.env.CACHE_CRITICAL_THRESHOLD = "0.7";

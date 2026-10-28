@@ -21,6 +21,37 @@ export function adminJsonResponse(
   };
 }
 
+export function normalizeAdminResourceId(value: unknown, label: string): AdminRouteResponse | string {
+  if (typeof value !== "string") {
+    return adminJsonResponse(400, { error: `${label} must be a string` });
+  }
+  const normalized = value.trim();
+  if (normalized.length === 0) {
+    return adminJsonResponse(400, { error: `${label} is required` });
+  }
+  if (
+    normalized.includes("/")
+    || normalized.includes("\\")
+    || normalized === "."
+    || normalized === ".."
+    || normalized.includes("..")
+  ) {
+    return adminJsonResponse(400, { error: `${label} contains unsupported path characters` });
+  }
+  return normalized;
+}
+
+export function normalizeAdminUsageWindow(value: unknown): AdminRouteResponse | "day" | "month" {
+  if (typeof value !== "string") {
+    return adminJsonResponse(400, { error: "Invalid usage window" });
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized !== "day" && normalized !== "month") {
+    return adminJsonResponse(400, { error: "Invalid usage window" });
+  }
+  return normalized;
+}
+
 function controlPlaneErrorStatus(code: ControlPlaneErrorCode): number {
   if (code === ControlPlaneErrorCode.BAD_REQUEST) {
     return 400;

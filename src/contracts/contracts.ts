@@ -108,3 +108,7 @@ export function redactIngestEvent(event: IngestEvent): IngestEvent {
     checksum: "redacted",
   };
 }
+
+import { EventEmitter } from "node:events";
+export const contractEventEmitter = new EventEmitter();
+

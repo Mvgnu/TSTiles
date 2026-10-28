@@ -1,5 +1,8 @@
 import { strict as assert } from "node:assert";
 import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import * as storageService from "../../storage/storage.service";
 import { IngestError, IngestErrorCode } from "../types";
 import { emitIngestCompleted, runIngestPipeline } from "../ingest.service";
@@ -49,6 +52,47 @@ test("ingest pipeline runs and emits completion events", async (): Promise<void>
   assert.equal(event.artifactVersion, report.artifactId);
   assert.equal(event.artifactKey, report.artifactKey);
   assert.equal(event.byteSize, report.byteSize);
+
+  try {
+    emitIngestCompleted(null as unknown as Parameters<typeof emitIngestCompleted>[0]);
+    assert.fail("expected malformed ingest report to be rejected");
+  } catch (error: unknown) {
+    assert.ok(error instanceof IngestError);
+    assert.equal((error as IngestError).code, IngestErrorCode.SOURCE_UNAVAILABLE);
+  }
+
+  try {
+    emitIngestCompleted({
+      ...report,
+      artifactId: 42 as unknown as string,
+    });
+    assert.fail("expected non-string artifactId to be rejected");
+  } catch (error: unknown) {
+    assert.ok(error instanceof IngestError);
+    assert.equal((error as IngestError).code, IngestErrorCode.SOURCE_UNAVAILABLE);
+  }
+
+  try {
+    emitIngestCompleted({
+      ...report,
+      byteSize: 12.5,
+    });
+    assert.fail("expected non-integer byteSize to be rejected");
+  } catch (error: unknown) {
+    assert.ok(error instanceof IngestError);
+    assert.equal((error as IngestError).code, IngestErrorCode.SOURCE_UNAVAILABLE);
+  }
+
+  try {
+    emitIngestCompleted({
+      ...report,
+      validated: "true" as unknown as boolean,
+    });
+    assert.fail("expected non-boolean validated to be rejected");
+  } catch (error: unknown) {
+    assert.ok(error instanceof IngestError);
+    assert.equal((error as IngestError).code, IngestErrorCode.SOURCE_UNAVAILABLE);
+  }
 
   const cachedSnapshot = {
     snapshotId: "snapshot-idempotent",
@@ -147,6 +191,33 @@ test("ingest pipeline runs and emits completion events", async (): Promise<void>
     IngestErrorCode.SOURCE_UNAVAILABLE,
   );
 
+  await assertIngestError(
+    {
+      snapshotId: "snapshot-file-non-local",
+      sourceUrl: "file://remote-host/tmp/planet.osm.pbf",
+      expectedChecksum: undefined,
+    },
+    IngestErrorCode.SOURCE_UNAVAILABLE,
+  );
+
+  await assertIngestError(
+    {
+      snapshotId: "snapshot-file-credentials",
+      sourceUrl: "file://user:secret@/tmp/planet.osm.pbf",
+      expectedChecksum: undefined,
+    },
+    IngestErrorCode.SOURCE_UNAVAILABLE,
+  );
+
+  await assertIngestError(
+    {
+      snapshotId: "snapshot-file-query-fragment",
+      sourceUrl: "file:///tmp/planet.osm.pbf?token=secret#preview",
+      expectedChecksum: undefined,
+    },
+    IngestErrorCode.SOURCE_UNAVAILABLE,
+  );
+
   const normalizedSnapshotReport = await runIngestPipeline({
     snapshotId: "SNAPSHOT-UPPER",
     sourceUrl: "data:text/plain,upper-case-snapshot",
@@ -173,6 +244,43 @@ test("ingest pipeline runs and emits completion events", async (): Promise<void>
     IngestErrorCode.SOURCE_UNAVAILABLE,
   );
 
+  await assertIngestError(
+    {
+      snapshotId: 42 as unknown as string,
+      sourceUrl: "data:text/plain,invalid-runtime-snapshot-id",
+      expectedChecksum: undefined,
+    },
+    IngestErrorCode.SOURCE_UNAVAILABLE,
+  );
+
+  await assertIngestError(
+    null as unknown as Parameters<typeof runIngestPipeline>[0],
+    IngestErrorCode.SOURCE_UNAVAILABLE,
+  );
+
+  await assertIngestError(
+    42 as unknown as Parameters<typeof runIngestPipeline>[0],
+    IngestErrorCode.SOURCE_UNAVAILABLE,
+  );
+
+  await assertIngestError(
+    {
+      snapshotId: "snapshot-invalid-runtime-source",
+      sourceUrl: 42 as unknown as string,
+      expectedChecksum: undefined,
+    },
+    IngestErrorCode.SOURCE_UNAVAILABLE,
+  );
+
+  await assertIngestError(
+    {
+      snapshotId: "snapshot-invalid-runtime-checksum",
+      sourceUrl: "data:text/plain,invalid-runtime-checksum",
+      expectedChecksum: 42 as unknown as string,
+    },
+    IngestErrorCode.SOURCE_UNAVAILABLE,
+  );
+
   storageService.setCreateObjectStore(() => {
     throw new Error("storage unavailable");
   });
@@ -189,24 +297,82 @@ test("ingest pipeline runs and emits completion events", async (): Promise<void>
     storageService.setCreateObjectStore(undefined);
   }
 
-  const evictedSeed = await runIngestPipeline({
-    snapshotId: "snapshot-evict-seed",
-    sourceUrl: "data:text/plain,evict-seed",
-    expectedChecksum: sha256("evict-seed"),
+  // Persistent idempotency: re-running an identical snapshot identity returns
+  // the same cached IngestRun row without re-fetching/converting/publishing,
+  // so multi-instance and restart-survival ingest deduplication holds.
+  const idempotencySnapshotId = `snapshot-idempotent-${Math.random().toString(16).slice(2, 10)}`;
+  const idempotentSeed = await runIngestPipeline({
+    snapshotId: idempotencySnapshotId,
+    sourceUrl: "data:text/plain,idempotent-seed",
+    expectedChecksum: sha256("idempotent-seed"),
   });
-  for (let index = 0; index < 140; index += 1) {
-    const snapshotId = `snapshot-evict-${String(index).padStart(3, "0")}`;
-    const payload = `evict-${index}`;
+  for (let index = 0; index < 5; index += 1) {
+    const filler = `snapshot-idempotent-filler-${Math.random().toString(16).slice(2, 10)}`;
+    const payload = `filler-${index}`;
     await runIngestPipeline({
-      snapshotId,
+      snapshotId: filler,
       sourceUrl: `data:text/plain,${payload}`,
       expectedChecksum: sha256(payload),
     });
   }
-  const evictedSeedRerun = await runIngestPipeline({
-    snapshotId: "snapshot-evict-seed",
-    sourceUrl: "data:text/plain,evict-seed",
-    expectedChecksum: sha256("evict-seed"),
+  const idempotentSeedRerun = await runIngestPipeline({
+    snapshotId: idempotencySnapshotId,
+    sourceUrl: "data:text/plain,idempotent-seed",
+    expectedChecksum: sha256("idempotent-seed"),
   });
-  assert.equal(evictedSeedRerun.startedAt === evictedSeed.startedAt, false);
+  assert.equal(idempotentSeedRerun.startedAt, idempotentSeed.startedAt);
+  assert.equal(idempotentSeedRerun.artifactId, idempotentSeed.artifactId);
+});
+
+test("ingest only deduplicates concurrent runs for the same full snapshot identity", async (): Promise<void> => {
+  const [first, second] = await Promise.all([
+    runIngestPipeline({
+      snapshotId: "snapshot-concurrent-identity",
+      sourceUrl: "data:text/plain,concurrent-a",
+      expectedChecksum: sha256("concurrent-a"),
+    }),
+    runIngestPipeline({
+      snapshotId: "snapshot-concurrent-identity",
+      sourceUrl: "data:text/plain,concurrent-b",
+      expectedChecksum: sha256("concurrent-b"),
+    }),
+  ]);
+
+  assert.equal(first.snapshotId, "snapshot-concurrent-identity");
+  assert.equal(second.snapshotId, "snapshot-concurrent-identity");
+  assert.equal(first.checksum, sha256("concurrent-a"));
+  assert.equal(second.checksum, sha256("concurrent-b"));
+  assert.equal(first.artifactId === second.artifactId, false);
+});
+
+test("ingest pipeline publishes PMTiles artifacts to the filesystem backend", async (): Promise<void> => {
+  const root = await mkdtemp(join(tmpdir(), "tileserver-ingest-root-"));
+  const previousMode = process.env.OBJECT_STORE_MODE;
+  const previousBucket = process.env.OBJECT_STORE_BUCKET;
+  try {
+    process.env.OBJECT_STORE_MODE = "filesystem";
+    process.env.OBJECT_STORE_BUCKET = root;
+
+    const filesystemSnapshotId = `snapshot-filesystem-publish-${Math.random().toString(16).slice(2, 10)}`;
+    const report = await runIngestPipeline({
+      snapshotId: filesystemSnapshotId,
+      sourceUrl: "data:text/plain,filesystem-artifact",
+      expectedChecksum: sha256("filesystem-artifact"),
+    });
+
+    const publishedBytes = await readFile(join(root, report.artifactKey));
+    assert.equal(new TextDecoder().decode(publishedBytes), "filesystem-artifact");
+  } finally {
+    if (previousMode === undefined) {
+      Reflect.deleteProperty(process.env, "OBJECT_STORE_MODE");
+    } else {
+      process.env.OBJECT_STORE_MODE = previousMode;
+    }
+    if (previousBucket === undefined) {
+      Reflect.deleteProperty(process.env, "OBJECT_STORE_BUCKET");
+    } else {
+      process.env.OBJECT_STORE_BUCKET = previousBucket;
+    }
+    await rm(root, { recursive: true, force: true });
+  }
 });

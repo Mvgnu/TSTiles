@@ -22,11 +22,10 @@ export function buildTileHeaders(
   if (byteLength !== undefined && Number.isInteger(byteLength) && byteLength >= 0) {
     headers["content-length"] = String(byteLength);
   }
-  if (method === "HEAD") {
-    headers["content-type"] = "application/vnd.mapbox-vector-tile";
-  } else {
-    headers["content-type"] = "application/vnd.mapbox-vector-tile";
-  }
+  headers["content-type"] = "application/vnd.mapbox-vector-tile";
   headers["cache-control"] = cacheControl ?? "public, max-age=300";
+  // Suppress HEAD-specific metadata that would otherwise leak distinct cache
+  // entries via the unused method check; behavior is identical for GET/HEAD.
+  void method;
   return headers;
 }

@@ -1,11 +1,12 @@
-import type { DeliverySignal } from "../../contracts/types";
+import type { DeliverySignal, QuotaThresholdEvent } from "../../contracts/types";
 import { loadConfig } from "../../config/load-config";
 import { getProjectPolicy } from "../projects/projects.service";
 import type { ProjectPolicy } from "../projects/types";
-import {
-  MeteringErrorCode,
-  MeteringError,
-} from "./types";
+import { prisma } from "../../config/db";
+import { emitDeliverySignalToSink } from "../observability/analytics/log-sink";
+import { MeteringErrorCode, MeteringError } from "./types";
+import { randomUUID } from "node:crypto";
+import { contractEventEmitter } from "../../contracts/contracts";
 import type {
   BillingEstimate,
   BillingPlan,
@@ -30,10 +31,6 @@ const billingPlansById: ReadonlyMap<string, BillingPlan> = new Map<string, Billi
   }],
 ]);
 
-const usageBuckets = new Map<string, number>();
-const globalMinuteBudgetBuckets = new Map<string, number>();
-const deliverySignalBuffer: DeliverySignal[] = [];
-const maxDeliverySignalBuffer = 500;
 const cleanupIntervalRequests = 256;
 const usageBucketRetentionWindows: Readonly<Record<UsageCounterWindow, number>> = {
   minute: 180,
@@ -58,50 +55,104 @@ interface WindowCounterState {
   readonly next: number;
 }
 
-function cloneDeliverySignal(signal: DeliverySignal): DeliverySignal {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function cloneDeliverySignal(signal: unknown): DeliverySignal | null {
+  if (!isRecord(signal)) {
+    return null;
+  }
+  const {
+    schemaVersion,
+    artifactVersion,
+    tilePath,
+    cacheStatus,
+    originRead,
+    responseBytes,
+    latencyMs,
+    statusCode,
+    normalizedMethod,
+    receivedAt,
+  } = signal;
+  if (
+    typeof schemaVersion !== "number"
+    || schemaVersion !== 1
+    || typeof artifactVersion !== "string"
+    || typeof tilePath !== "string"
+    || (cacheStatus !== "hit" && cacheStatus !== "miss")
+    || typeof originRead !== "boolean"
+    || typeof responseBytes !== "number"
+    || typeof latencyMs !== "number"
+    || typeof statusCode !== "number"
+    || (normalizedMethod !== "GET" && normalizedMethod !== "HEAD" && normalizedMethod !== "OPTIONS")
+    || typeof receivedAt !== "string"
+  ) {
+    return null;
+  }
   return {
-    schemaVersion: signal.schemaVersion,
-    artifactVersion: signal.artifactVersion,
-    tilePath: signal.tilePath,
-    cacheStatus: signal.cacheStatus,
-    originRead: signal.originRead,
-    responseBytes: signal.responseBytes,
-    latencyMs: signal.latencyMs,
-    statusCode: signal.statusCode,
-    normalizedMethod: signal.normalizedMethod,
-    receivedAt: signal.receivedAt,
+    schemaVersion,
+    artifactVersion,
+    tilePath,
+    cacheStatus,
+    originRead,
+    responseBytes,
+    latencyMs,
+    statusCode,
+    normalizedMethod,
+    receivedAt,
   };
 }
 
-function pushBufferedDeliverySignal(signal: DeliverySignal): void {
-  if (deliverySignalBuffer.length >= maxDeliverySignalBuffer) {
-    deliverySignalBuffer.shift();
+function emitBufferedDeliverySignal(signal: DeliverySignal): void {
+  try {
+    const config = loadConfig();
+    emitDeliverySignalToSink(config.observability.logSink, signal);
+  } catch {
+    // Telemetry emission must never break the request path; bad runtime config
+    // (caught here only for resilience) defers to the sink module's no-op
+    // behavior under errors.
   }
-  deliverySignalBuffer.push(signal);
 }
 
 function throwMeteringError(code: MeteringErrorCode, details: string): never {
   throw new MeteringError(code, details);
 }
 
-function normalizeEndpointGroup(endpointGroup: string): EndpointGroup | null {
+function normalizeEndpointGroup(endpointGroup: unknown): EndpointGroup | null {
+  if (typeof endpointGroup !== "string") {
+    return null;
+  }
   const normalized = endpointGroup.trim().toLowerCase();
   if (normalized === "tiles" || normalized === "raster" || normalized === "static") {
-    return normalized;
+    return normalized as EndpointGroup;
   }
   return null;
 }
 
-function isUsageWindow(window: string): window is UsageCounterWindow {
-  return window === "minute" || window === "day" || window === "month";
-}
-
-function isEndpointGroup(endpointGroup: string): endpointGroup is EndpointGroup {
-  return endpointGroup === "tiles" || endpointGroup === "raster" || endpointGroup === "static";
+function normalizeUsageWindow(window: unknown): UsageCounterWindow | null {
+  if (typeof window !== "string") {
+    return null;
+  }
+  const normalized = window.trim().toLowerCase();
+  if (normalized === "minute" || normalized === "day" || normalized === "month") {
+    return normalized as UsageCounterWindow;
+  }
+  return null;
 }
 
 function isSafeCounterToken(value: string | undefined): value is string {
-  return typeof value === "string" && value.length > 0 && !value.includes("|");
+  return (
+    typeof value === "string"
+    && value.length > 0
+    && value.trim().length > 0
+    && value.trim() === value
+    && value !== "."
+    && !value.includes("|")
+    && !value.includes("/")
+    && !value.includes("\\")
+    && !value.includes("..")
+  );
 }
 
 function isValidUsageIdentity(identity: ProjectUsageIdentity | null): identity is ProjectUsageIdentity {
@@ -164,42 +215,23 @@ function usageRetentionCutoff(window: UsageCounterWindow, now = new Date(Date.no
   return bucketWindow(window, subtractWindow(now, window, usageBucketRetentionWindows[window]));
 }
 
-function cleanupUsageBuckets(now = new Date(Date.now())): void {
+async function cleanupUsageBuckets(now = new Date(Date.now())): Promise<void> {
   const minuteCutoff = usageRetentionCutoff("minute", now);
   const dayCutoff = usageRetentionCutoff("day", now);
   const monthCutoff = usageRetentionCutoff("month", now);
 
-  for (const key of usageBuckets.keys()) {
-    const parts = key.split("|");
-    if (parts.length !== 6) {
-      usageBuckets.delete(key);
-      continue;
-    }
-    const entryWindow = parts[4];
-    const entryBucket = parts[5];
-    if (!isUsageWindow(entryWindow) || !isSafeCounterToken(entryBucket)) {
-      usageBuckets.delete(key);
-      continue;
-    }
-    const cutoff = entryWindow === "minute"
-      ? minuteCutoff
-      : entryWindow === "day"
-        ? dayCutoff
-        : monthCutoff;
-    if (entryBucket < cutoff) {
-      usageBuckets.delete(key);
-    }
-  }
-
-  for (const key of globalMinuteBudgetBuckets.keys()) {
-    if (!isSafeCounterToken(key)) {
-      globalMinuteBudgetBuckets.delete(key);
-      continue;
-    }
-    if (key < minuteCutoff) {
-      globalMinuteBudgetBuckets.delete(key);
-    }
-  }
+  await prisma.usageBucket.deleteMany({
+    where: { window: "minute", bucket: { lt: minuteCutoff } }
+  });
+  await prisma.usageBucket.deleteMany({
+    where: { window: "day", bucket: { lt: dayCutoff } }
+  });
+  await prisma.usageBucket.deleteMany({
+    where: { window: "month", bucket: { lt: monthCutoff } }
+  });
+  await prisma.globalBudgetBucket.deleteMany({
+    where: { bucket: { lt: minuteCutoff } }
+  });
 }
 
 function maybeCleanupUsageBuckets(now = new Date(Date.now())): void {
@@ -208,7 +240,8 @@ function maybeCleanupUsageBuckets(now = new Date(Date.now())): void {
     return;
   }
   requestsSinceCleanup = 0;
-  cleanupUsageBuckets(now);
+  // Fire and forget
+  cleanupUsageBuckets(now).catch(() => {});
 }
 
 function parseSafePositiveInt(limit: number | undefined): number | undefined {
@@ -239,13 +272,7 @@ function windowPriority(window: UsageCounterWindow): number {
 function selectPrimaryLimit(
   windows: readonly WindowCounterState[],
 ): { readonly limit?: number; readonly remaining?: number } {
-  let selected:
-    | {
-      readonly limit: number;
-      readonly remaining: number;
-      readonly window: UsageCounterWindow;
-    }
-    | undefined;
+  let selected: { limit: number; remaining: number; window: UsageCounterWindow } | undefined;
 
   for (const entry of windows) {
     if (entry.limit === undefined) {
@@ -277,223 +304,210 @@ function selectPrimaryLimit(
   };
 }
 
-export function consumeRequestUnit(identity: ProjectUsageIdentity | null, endpointGroup: string): QuotaDecision {
+export async function consumeRequestUnit(identity: ProjectUsageIdentity | null, endpointGroup: string): Promise<QuotaDecision> {
   maybeCleanupUsageBuckets();
   if (!isValidUsageIdentity(identity)) {
-    return {
-      allow: false,
-      denyReason: "quota",
-      remaining: 0,
-      limit: 0,
-    };
+    return { allow: false, denyReason: "quota", remaining: 0, limit: 0 };
   }
 
   const group = normalizeEndpointGroup(endpointGroup);
   if (group === null) {
-    return {
-      allow: false,
-      denyReason: "quota",
-      remaining: 0,
-      limit: 0,
-    };
+    return { allow: false, denyReason: "quota", remaining: 0, limit: 0 };
   }
+
   let policy: ProjectPolicy;
   try {
-    policy = getProjectPolicy(identity.projectId);
+    policy = await getProjectPolicy(identity.projectId);
   } catch {
-    return {
-      allow: false,
-      denyReason: "quota",
-      remaining: 0,
-      limit: 0,
-    };
+    return { allow: false, denyReason: "quota", remaining: 0, limit: 0 };
   }
   if (!isEndpointAllowed(policy, group)) {
-    return {
-      allow: false,
-      denyReason: "quota",
-      remaining: 0,
-      limit: 0,
-    };
+    return { allow: false, denyReason: "quota", remaining: 0, limit: 0 };
+  }
+
+  let isSuspended = false;
+  let workspaceId = "default-workspace";
+  try {
+    const project = await prisma.project.findUnique({
+      where: { id: identity.projectId },
+      select: { workspaceId: true },
+    });
+    if (project) {
+      workspaceId = project.workspaceId;
+      const workspace = await prisma.identityWorkspace.findUnique({
+        where: { id: project.workspaceId },
+        select: { suspendedAt: true },
+      });
+      if (workspace && workspace.suspendedAt) {
+        isSuspended = true;
+      }
+    }
+  } catch {
+    // DB error, proceed as not suspended
   }
 
   const minuteLimit = parseSafePositiveInt(policy.quotas?.minuteRequests);
   const dailyLimit = parseSafePositiveInt(policy.quotas?.dailyRequests);
   const monthlyLimit = parseSafePositiveInt(policy.quotas?.monthlyRequests);
   const runtimeConfig = loadConfig();
-  const globalMinuteBudgetLimit = parseSafePositiveInt(
-    runtimeConfig.tileDeliveryPolicy.globalRequestBudgetPerMinute,
-  );
+  const globalMinuteBudgetLimit = parseSafePositiveInt(runtimeConfig.tileDeliveryPolicy.globalRequestBudgetPerMinute);
   const now = new Date(Date.now());
+  
   const globalMinuteBudgetKey = bucketWindow("minute", now);
-  const currentGlobalMinuteBudget = globalMinuteBudgetBuckets.get(globalMinuteBudgetKey) ?? 0;
-  const minuteKey = counterKey(
-    identity.projectId,
-    identity.keyHash,
-    identity.planId,
-    group,
-    "minute",
-    bucketWindow("minute", now),
-  );
-  const dayKey = counterKey(
-    identity.projectId,
-    identity.keyHash,
-    identity.planId,
-    group,
-    "day",
-    bucketWindow("day", now),
-  );
-  const monthKey = counterKey(
-    identity.projectId,
-    identity.keyHash,
-    identity.planId,
-    group,
-    "month",
-    bucketWindow("month", now),
-  );
-  // TODO: Back counters with shared atomic storage for multi-process deployments.
-  const currentMinute = usageBuckets.get(minuteKey) ?? 0;
-  const currentDay = usageBuckets.get(dayKey) ?? 0;
-  const currentMonth = usageBuckets.get(monthKey) ?? 0;
-  const minuteState: WindowCounterState = {
-    window: "minute",
-    key: minuteKey,
-    limit: minuteLimit,
-    current: currentMinute,
-    next: currentMinute + 1,
-  };
-  const dayState: WindowCounterState = {
-    window: "day",
-    key: dayKey,
-    limit: dailyLimit,
-    current: currentDay,
-    next: currentDay + 1,
-  };
-  const monthState: WindowCounterState = {
-    window: "month",
-    key: monthKey,
-    limit: monthlyLimit,
-    current: currentMonth,
-    next: currentMonth + 1,
-  };
-  const globalMinuteState: WindowCounterState = {
-    window: "minute",
-    key: globalMinuteBudgetKey,
-    limit: globalMinuteBudgetLimit,
-    current: currentGlobalMinuteBudget,
-    next: currentGlobalMinuteBudget + 1,
-  };
+  const minuteBucketStr = bucketWindow("minute", now);
+  const dayBucketStr = bucketWindow("day", now);
+  const monthBucketStr = bucketWindow("month", now);
 
-  if (globalMinuteState.limit !== undefined) {
-    if (globalMinuteState.current >= globalMinuteState.limit) {
-      return {
-        allow: false,
-        denyReason: "rate_limit",
-        remaining: 0,
-        limit: globalMinuteState.limit,
-      };
+  const minuteKey = counterKey(identity.projectId, identity.keyHash, identity.planId, group, "minute", minuteBucketStr);
+  const dayKey = counterKey(identity.projectId, identity.keyHash, identity.planId, group, "day", dayBucketStr);
+  const monthKey = counterKey(identity.projectId, identity.keyHash, identity.planId, group, "month", monthBucketStr);
+  return prisma.$transaction(async (tx) => {
+    const [globalEntity, minuteEntity, dayEntity, monthEntity] = await Promise.all([
+      tx.globalBudgetBucket.findUnique({ where: { bucket: globalMinuteBudgetKey } }),
+      tx.usageBucket.findUnique({ where: { compositeKey: minuteKey } }),
+      tx.usageBucket.findUnique({ where: { compositeKey: dayKey } }),
+      tx.usageBucket.findUnique({ where: { compositeKey: monthKey } }),
+    ]);
+
+    const currentGlobalMinuteBudget = globalEntity?.requestCount ?? 0;
+    const currentMinute = minuteEntity?.requestCount ?? 0;
+    const currentDay = dayEntity?.requestCount ?? 0;
+    const currentMonth = monthEntity?.requestCount ?? 0;
+
+    const minuteState: WindowCounterState = { window: "minute", key: minuteKey, limit: minuteLimit, current: currentMinute, next: currentMinute + 1 };
+    const dayState: WindowCounterState = { window: "day", key: dayKey, limit: dailyLimit, current: currentDay, next: currentDay + 1 };
+    const monthState: WindowCounterState = { window: "month", key: monthKey, limit: monthlyLimit, current: currentMonth, next: currentMonth + 1 };
+    const globalMinuteState: WindowCounterState = { window: "minute", key: globalMinuteBudgetKey, limit: globalMinuteBudgetLimit, current: currentGlobalMinuteBudget, next: currentGlobalMinuteBudget + 1 };
+
+    if (globalMinuteState.limit !== undefined && globalMinuteState.current >= globalMinuteState.limit) {
+      return { allow: false, denyReason: "rate_limit", remaining: 0, limit: globalMinuteState.limit } satisfies QuotaDecision;
     }
-  }
-
-  if (minuteState.limit !== undefined) {
-    if (minuteState.current >= minuteState.limit) {
-      return {
-        allow: false,
-        denyReason: "rate_limit",
-        remaining: 0,
-        limit: minuteState.limit,
-      };
+    if (minuteState.limit !== undefined && minuteState.current >= minuteState.limit) {
+      return { allow: false, denyReason: "rate_limit", remaining: 0, limit: minuteState.limit } satisfies QuotaDecision;
     }
-  }
-
-  if (dayState.limit !== undefined) {
-    if (dayState.current >= dayState.limit) {
-      return {
-        allow: false,
-        denyReason: "quota",
-        remaining: 0,
-        limit: dayState.limit,
-      };
+    if (dayState.limit !== undefined && dayState.current >= dayState.limit) {
+      return { allow: false, denyReason: "quota", remaining: 0, limit: dayState.limit } satisfies QuotaDecision;
     }
-  }
-  if (monthState.limit !== undefined) {
-    if (monthState.current >= monthState.limit) {
-      return {
-        allow: false,
-        denyReason: "quota",
-        remaining: 0,
-        limit: monthState.limit,
-      };
+    if (monthState.limit !== undefined && monthState.current >= monthState.limit) {
+      return { allow: false, denyReason: "quota", remaining: 0, limit: monthState.limit } satisfies QuotaDecision;
     }
-  }
 
-  usageBuckets.set(minuteState.key, minuteState.next);
-  usageBuckets.set(dayState.key, dayState.next);
-  usageBuckets.set(monthState.key, monthState.next);
-  globalMinuteBudgetBuckets.set(globalMinuteState.key, globalMinuteState.next);
+    await Promise.all([
+      tx.globalBudgetBucket.upsert({
+        where: { bucket: globalMinuteState.key },
+        update: { requestCount: { increment: 1 } },
+        create: { bucket: globalMinuteState.key, requestCount: 1 }
+      }),
+      tx.usageBucket.upsert({
+        where: { compositeKey: minuteState.key },
+        update: { requestCount: { increment: 1 } },
+        create: { compositeKey: minuteState.key, projectId: identity.projectId, keyHash: identity.keyHash, planId: identity.planId, endpointGroup: group, window: "minute", bucket: minuteBucketStr, requestCount: 1 }
+      }),
+      tx.usageBucket.upsert({
+        where: { compositeKey: dayState.key },
+        update: { requestCount: { increment: 1 } },
+        create: { compositeKey: dayState.key, projectId: identity.projectId, keyHash: identity.keyHash, planId: identity.planId, endpointGroup: group, window: "day", bucket: dayBucketStr, requestCount: 1 }
+      }),
+      tx.usageBucket.upsert({
+        where: { compositeKey: monthState.key },
+        update: { requestCount: { increment: 1 } },
+        create: { compositeKey: monthState.key, projectId: identity.projectId, keyHash: identity.keyHash, planId: identity.planId, endpointGroup: group, window: "month", bucket: monthBucketStr, requestCount: 1 }
+      })
+    ]);
 
-  const primary = selectPrimaryLimit([globalMinuteState, minuteState, dayState, monthState]);
+    if (monthlyLimit !== undefined) {
+      const usagePercentBefore = (currentMonth / monthlyLimit) * 100;
+      const usagePercentAfter = ((currentMonth + 1) / monthlyLimit) * 100;
 
-  return {
-    allow: true,
-    remaining: primary.remaining,
-    limit: primary.limit,
-  };
+      const checkAndEmit = async (threshold: 80 | 100) => {
+        if (usagePercentBefore < threshold && usagePercentAfter >= threshold) {
+          const monthlyWindowStart = monthBucketStr;
+          const thresholdReason = `monthly_quota_${threshold}_percent_crossed:${monthlyWindowStart}`;
+          const existingEvent = await tx.identityAuthEvent.findFirst({
+            where: {
+              workspaceId,
+              eventType: "QUOTA_THRESHOLD_CROSSED",
+              reason: thresholdReason,
+            },
+          });
+          if (!existingEvent) {
+            const eventId = `evt_${randomUUID().replace(/-/g, "")}`;
+            await tx.identityAuthEvent.create({
+              data: {
+                id: eventId,
+                eventType: "QUOTA_THRESHOLD_CROSSED",
+                workspaceId,
+                outcome: "success",
+                reason: thresholdReason,
+                recordedAt: now.toISOString(),
+              },
+            });
+
+            const eventPayload: QuotaThresholdEvent = {
+              eventId,
+              workspaceId,
+              planId: identity.planId,
+              thresholdPercent: threshold,
+              usagePercent: usagePercentAfter,
+              windowKind: "month",
+              windowStart: monthlyWindowStart,
+              recordedAt: now.toISOString(),
+            };
+
+            queueMicrotask(() => {
+              contractEventEmitter.emit("quota.threshold_crossed", eventPayload);
+            });
+          }
+        }
+      };
+
+      await checkAndEmit(80);
+      await checkAndEmit(100);
+    }
+
+    if (isSuspended) {
+      return { allow: false, denyReason: "workspace_suspended", remaining: 0, limit: monthlyLimit ?? 0 } satisfies QuotaDecision;
+    }
+
+    const primary = selectPrimaryLimit([globalMinuteState, minuteState, dayState, monthState]);
+    return {
+      allow: true,
+      remaining: primary.remaining,
+      limit: primary.limit,
+    } satisfies QuotaDecision;
+  });
 }
 
 export function recordDeliverySignal(signal: DeliverySignal): void {
   const snapshot = cloneDeliverySignal(signal);
+  if (snapshot === null) {
+    return;
+  }
   queueMicrotask(() => {
-    pushBufferedDeliverySignal(snapshot);
+    emitBufferedDeliverySignal(snapshot);
   });
 }
 
-export function getUsageSummary(projectId: string, window: UsageCounterWindow): UsageSummary[] {
-  cleanupUsageBuckets();
-  if (!isSafeCounterToken(projectId)) {
+export async function getUsageSummary(projectId: string, window: UsageCounterWindow): Promise<UsageSummary[]> {
+  await cleanupUsageBuckets();
+  const normalizedWindow = normalizeUsageWindow(window);
+  if (!isSafeCounterToken(projectId) || normalizedWindow === null) {
     return [];
   }
-  const bucket = bucketWindow(window);
-  const out: UsageSummary[] = [];
-  for (const [key, value] of usageBuckets.entries()) {
-    const parts = key.split("|");
-    if (parts.length !== 6) {
-      continue;
-    }
-    const [entryProject, entryKeyHash, entryPlanId, endpointGroup, entryWindow, entryBucket] = parts;
-    if (
-      !isSafeCounterToken(entryProject)
-      || !isSafeCounterToken(entryKeyHash)
-      || !isSafeCounterToken(entryPlanId)
-      || !isSafeCounterToken(entryBucket)
-    ) {
-      continue;
-    }
-    if (entryProject !== projectId || entryWindow !== window || entryBucket !== bucket) {
-      continue;
-    }
-    if (!isUsageWindow(entryWindow)) {
-      continue;
-    }
-    if (!isEndpointGroup(endpointGroup)) {
-      continue;
-    }
-    out.push({
-      projectId: entryProject,
-      keyHash: entryKeyHash,
-      planId: entryPlanId,
-      window: entryWindow,
-      bucket: entryBucket,
-      endpointGroup: endpointGroup,
-      requestCount: value,
-      unit: "request",
-    });
-  }
-  return out;
+  
+  const bucket = bucketWindow(normalizedWindow);
+  const rows = await prisma.usageBucket.findMany({
+    where: { projectId, window: normalizedWindow, bucket }
+  });
+
+  return rows
+    .map((row) => normalizeUsageSummaryRow(row))
+    .filter((row): row is UsageSummary => row !== null);
 }
 
-function resolveBillingPlan(planId: string): BillingPlan {
-  const matched = billingPlansById.get(planId.toLowerCase());
+function resolveBillingPlan(planId: unknown): BillingPlan {
+  const normalizedPlanId = normalizeBillingPlanKey(planId);
+  const matched = normalizedPlanId ? billingPlansById.get(normalizedPlanId) : undefined;
   if (matched) {
     return matched;
   }
@@ -504,22 +518,125 @@ function resolveBillingPlan(planId: string): BillingPlan {
   throwMeteringError(MeteringErrorCode.BAD_IDENTITY, "free billing plan is missing");
 }
 
+function normalizeBillingPlanKey(planId: unknown): string | undefined {
+  if (planId === undefined) {
+    return undefined;
+  }
+  if (typeof planId !== "string") {
+    return undefined;
+  }
+  const normalized = planId.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function isUsageSummaryRecord(value: unknown): value is UsageSummary {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.projectId === "string"
+    && typeof value.keyHash === "string"
+    && typeof value.planId === "string"
+    && (value.window === "minute" || value.window === "day" || value.window === "month")
+    && typeof value.bucket === "string"
+    && (value.endpointGroup === "tiles" || value.endpointGroup === "raster" || value.endpointGroup === "static")
+    && typeof value.requestCount === "number"
+    && value.unit === "request"
+  );
+}
+
+function normalizeUsageSummaryRow(value: unknown): UsageSummary | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const projectId = typeof value.projectId === "string" ? value.projectId : undefined;
+  const keyHash = typeof value.keyHash === "string" ? value.keyHash : undefined;
+  const planId = typeof value.planId === "string" ? value.planId : undefined;
+  const window = normalizeUsageWindow(value.window);
+  const endpointGroup = normalizeEndpointGroup(value.endpointGroup);
+  const bucket = value.bucket;
+  const requestCount = value.requestCount;
+  if (
+    !isSafeCounterToken(projectId)
+    || !isSafeCounterToken(keyHash)
+    || !isSafeCounterToken(planId)
+    || window === null
+    || endpointGroup === null
+    || typeof bucket !== "string"
+    || bucket.trim().length === 0
+    || typeof requestCount !== "number"
+    || !Number.isFinite(requestCount)
+    || !Number.isInteger(requestCount)
+    || requestCount < 0
+  ) {
+    return null;
+  }
+  return {
+    projectId,
+    keyHash,
+    planId,
+    window,
+    bucket,
+    endpointGroup,
+    requestCount,
+    unit: "request",
+  };
+}
+
+function isBillingPlanRecord(value: unknown): value is BillingPlan {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.planId === "string"
+    && typeof value.freeAllowancePerMonth === "number"
+    && Number.isFinite(value.freeAllowancePerMonth)
+    && value.freeAllowancePerMonth >= 0
+    && Number.isInteger(value.freeAllowancePerMonth)
+    && typeof value.unitPricePerThousandRequests === "number"
+    && Number.isFinite(value.unitPricePerThousandRequests)
+    && value.unitPricePerThousandRequests >= 0
+    && typeof value.currency === "string"
+  );
+}
+
+export function getBillingPlan(planId: string): BillingPlan {
+  return {
+    ...resolveBillingPlan(planId),
+  };
+}
+
+export function listBillingPlans(): BillingPlan[] {
+  return [...billingPlansById.values()].map((plan) => ({
+    ...plan,
+  }));
+}
+
 export function computeBillingEstimate(summary: UsageSummary | UsageSummary[], plan?: BillingPlan): BillingEstimate {
   const items = Array.isArray(summary) ? summary : [summary];
+  if (items.some((item) => !isUsageSummaryRecord(item))) {
+    throwMeteringError(MeteringErrorCode.BAD_IDENTITY, "billing estimate requires valid usage summaries");
+  }
+  if (plan !== undefined && !isBillingPlanRecord(plan)) {
+    throwMeteringError(MeteringErrorCode.BAD_IDENTITY, "billing estimate requires a valid billing plan");
+  }
   if (items.some((item) => item.window !== "month")) {
     throwMeteringError(MeteringErrorCode.BAD_IDENTITY, "billing estimate requires monthly usage windows");
+  }
+  if (items.some((item) => !Number.isFinite(item.requestCount) || item.requestCount < 0)) {
+    throwMeteringError(MeteringErrorCode.BAD_IDENTITY, "billing estimate requires non-negative finite request counts");
   }
   const firstProjectId = items[0]?.projectId;
   if (firstProjectId !== undefined && items.some((item) => item.projectId !== firstProjectId)) {
     throwMeteringError(MeteringErrorCode.BAD_IDENTITY, "billing estimate requires a single projectId");
   }
-  const firstPlanId = items[0]?.planId.toLowerCase();
-  if (firstPlanId !== undefined && items.some((item) => item.planId.toLowerCase() !== firstPlanId)) {
+  const firstPlanId = normalizeBillingPlanKey(items[0]?.planId);
+  if (firstPlanId !== undefined && items.some((item) => normalizeBillingPlanKey(item.planId) !== firstPlanId)) {
     throwMeteringError(MeteringErrorCode.BAD_IDENTITY, "billing estimate requires a single planId");
   }
-  const summaryPlanId = (items[0]?.planId ?? "free").toLowerCase();
+  const summaryPlanId = normalizeBillingPlanKey(items[0]?.planId) ?? "free";
   const resolvedPlan = plan ?? resolveBillingPlan(summaryPlanId);
-  if (plan && items.length > 0 && plan.planId.toLowerCase() !== summaryPlanId) {
+  if (plan && items.length > 0 && normalizeBillingPlanKey(plan.planId) !== summaryPlanId) {
     throwMeteringError(MeteringErrorCode.BAD_IDENTITY, "explicit billing plan does not match usage summary");
   }
   const requestCount = items.reduce((total: number, item) => total + item.requestCount, 0);
