@@ -1,0 +1,45 @@
+{
+  "name": "tilesserver",
+  "private": true,
+  "type": "commonjs",
+  "version": "0.0.0",
+  "engines": {
+    "node": ">=20 <23"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run test:platform && npm run test:domains && npm run test:app",
+    "test:app": "vitest run src/app/__tests__ --globals --passWithNoTests",
+    "test:domains": "vitest run src/domains --globals --passWithNoTests",
+    "test:platform": "vitest run src/config/__tests__ src/contracts/__tests__ --globals --passWithNoTests",
+    "test:integration:s3": "RUN_S3_COMPAT_INTEGRATION=1 vitest run src/domains/storage/__tests__/storage-s3-compatible.integration.test.ts --globals --passWithNoTests",
+    "db:push": "prisma db push --accept-data-loss --skip-generate",
+    "db:generate": "prisma generate",
+    "demo:start": "npm run db:push && npm run build && node dist/app/demo-server.js",
+    "smoke:e2e": "bash scripts/smoke-e2e.sh",
+    "readiness:check": "bash scripts/readiness-check.sh",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.3",
+    "@prisma/client": "^6.19.2",
+    "@types/node": "^25.3.0",
+    "eslint": "^9.39.3",
+    "globals": "^17.4.0",
+    "prisma": "^6.19.2",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.56.1",
+    "vitest": "^4.0.18"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1002.0",
+    "@node-rs/argon2": "^2.2.0",
+    "pmtiles": "^4.3.0",
+    "sharp": "^0.34.5"
+  },
+  "optionalDependencies": {
+    "@maplibre/maplibre-gl-native": "^6.4.1"
+  }
+}

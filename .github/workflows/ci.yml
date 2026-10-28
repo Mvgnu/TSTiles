@@ -1,64 +1,46 @@
-name: ci
+name: Active map pipeline
 
 on:
-  push:
   pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
         with:
-          node-version: 20
+          node-version: '22'
           cache: npm
-
-      - name: Install
-        run: npm ci
-
-      - name: Prisma Generate
-        run: npx prisma generate
-
-      - name: Prisma DB Push
-        run: npx prisma db push --accept-data-loss --skip-generate
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Platform Tests
-        run: npm run test:platform
-
-      - name: Domain Tests
-        run: npm run test:domains
-
-      - name: App Tests
-        run: npm run test:app
-
-      - name: Build
-        run: npm run build
-
-      - name: Start Demo Server
-        run: nohup node dist/app/demo-server.js > /tmp/tileserver-demo.log 2>&1 &
-
-      - name: Wait for Health
+      - run: npm ci
+      - name: Install pinned Caddy with release checksum
+        shell: bash
         run: |
-          for _ in {1..60}; do
-            if curl -fsS http://127.0.0.1:8787/v1/health >/dev/null; then
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "Demo server failed to become healthy"
-          cat /tmp/tileserver-demo.log || true
-          exit 1
-
-      - name: Smoke E2E
-        run: npm run smoke:e2e
+          curl --fail --location --silent --show-error \
+            https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_amd64.tar.gz \
+            --output "$RUNNER_TEMP/caddy.tar.gz"
+          echo "727b91701a392de6ebc5027509f548bf39979e5216340d0faed8fa5e69c84f8b  $RUNNER_TEMP/caddy.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/caddy.tar.gz" -C "$RUNNER_TEMP" caddy
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - run: npm run check
+      - run: npm test
+      - run: npm run test:architecture
+      - run: npm run build
+      - run: npm run demo:prepare
+      - run: npm run test:hosting
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+      - name: Preserve browser proof
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: browser-proof
+          path: test-results/browser/
+          if-no-files-found: warn
+          retention-days: 14

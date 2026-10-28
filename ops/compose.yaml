@@ -1,0 +1,36 @@
+services:
+  caddy:
+    # Release and official image tag verified 2026-10-28. Upgrade deliberately.
+    image: caddy:2.11.7-alpine
+    restart: unless-stopped
+    user: "65532:65532"
+    read_only: true
+    cap_drop:
+      - ALL
+    # The official binary carries this file capability. Retaining it in the
+    # bounding set avoids exec EPERM, even though we use high internal ports.
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      MAPS_DOMAIN: "${MAPS_DOMAIN:?Set MAPS_DOMAIN in ops/.env}"
+      TSTILES_ROOT: /srv
+      XDG_DATA_HOME: /data
+      XDG_CONFIG_HOME: /config
+    ports:
+      - "80:8080"
+      - "443:8443"
+      - "443:8443/udp"
+    volumes:
+      - ./:/etc/caddy:ro
+      - ../site:/srv:ro
+      - ./state/data:/data
+      - ./state/config:/config
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

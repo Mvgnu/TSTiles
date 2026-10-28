@@ -1,90 +1,75 @@
 ---
-description: Domain-scoped development with explicit ownership and verification
+description: Domain-scoped development with isolated writes and executable contracts.
 ---
 
-# Lop: domain-scoped delivery
+# Lop: domain-scoped development
 
-Lop is the implementation half of this repository's quality process. Each
-builder owns a small, named slice, reads the rest of the repository for context,
-and writes only inside the paths assigned by the PM. Gauntlet is the independent
-quality half; read `.agent/workflows/gauntlet.md` as well.
+Lop answers whether a domain built what its spec describes. Read `gauntlet.md`
+as well: the external quality bar and independent critic answer whether it is
+useful. Green checks are the entry condition for judgement.
 
-## Source of truth
+## Domains and authority
 
-- Domain intent and boundaries live in `specs/<domain>.spec.md`.
-- Cross-cutting rules live in `specs/_cross_cutting.spec.md`.
-- Runtime truth lives in executable tests and the composed application, not in
-  a readiness checkbox or a direct service test alone.
-- A builder brief may narrow a spec's write paths. It may not silently widen
-  them.
+TSTiles is one npm package with three ownership bubbles. Do not introduce a
+monorepo merely to reproduce a workflow's example directory names.
 
-If a spec contradicts the implementation or asks for something unsafe, report
-the disagreement plainly. Do not make the code pretend that the spec is true.
+| Domain | Spec | Owned behavior |
+| --- | --- | --- |
+| archive | `src/archive/SPEC.md` | Inspect and publish exact PMTiles bytes |
+| web | `src/web/SPEC.md` | Render and embed independently configured maps |
+| hosting | `ops/SPEC.md` | Static HTTP delivery and operations |
 
-## Builder cycle
+System intent and cross-domain rulings live in `specs/00_system.md`.
+`src/contract.ts` is the single public manifest/type contract. Each spec has
+machine-readable `name`, `description`, `paths.owned`, `paths.tests`, `exports`,
+`consumes`, `verification.check/test/build`, and `bar.reference/property`.
 
-1. Read this file, the assigned domain spec, its `bar`, and the PM ruling.
-2. Read canonical types and direct dependencies before editing.
-3. State the owned write paths. Everything else is read-only.
-4. Implement the smallest coherent change that closes the assigned gap.
-5. Test through the public boundary. Direct unit tests are useful but cannot
-   prove that an HTTP route is registered or a page is usable.
-6. Run the domain verification commands plus the narrowest relevant
-   integration check.
-7. Report changed files, evidence, remaining risk, and any disagreement.
-8. Stop. A fresh Gauntlet critic judges the artifact; builders do not grade
-   their own work.
+The spec's bar must name external work and one property that can be inspected.
+A reference alone is a mood board; a property alone is self-assessment.
 
 ## Write gate
 
-Builders may write only to paths listed in the PM brief. A required change
-outside the bubble is a PM escalation. Shared files such as `package.json`,
-`prisma/schema.prisma`, `src/app/**`, and cross-cutting specs need explicit PM
-ownership in the brief.
+Builders may change only their spec's owned/test paths. Updating their SPEC's
+exports, consumes, verification, and known gaps is permitted. Changing path
+ownership or the frozen contract requires a PM ruling first.
 
-Do not overwrite unrelated working-tree changes. This repository may be dirty;
-assume existing changes belong to the owner.
+PM-owned: root package/lockfile and tool configuration; `src/contract.ts`;
+`scripts/`; `test/architecture/`; `test/fixtures/`; `.agent/`; `.github/`;
+`AGENTS.md`; `README.md`; `specs/`; `legacy/`. Generated `dist/`, `site/`, caches,
+screenshots, logs, and dependency installs are verification output, never source
+patches. Nothing may import from the archived SaaS implementation.
 
-## TypeScript baseline
+Read access covers the repository. There are no sibling-repository dependencies.
+No paid service, production deploy, email, or message is part of a builder cycle.
 
-- Keep strict TypeScript. Model boundary input as `unknown` and narrow it once
-  at the boundary.
-- Do not use `any`, double casts, non-null assertions, or copied validators to
-  silence design problems.
-- Prefer explicit dependencies over ambient singletons and service locators.
-- Keep one application composition root. Domain services own behavior; the app
-  owns routing, lifecycle, limits, and error presentation.
-- Do not invent cryptographic formats, compatibility labels, or production
-  claims. Use maintained implementations and interoperable encodings.
-- Keep request bodies, caches, queries, and file reads bounded.
-- User-facing errors are stable and non-sensitive; detailed causes stay in
-  redacted server logs.
+## Cycle
 
-## Verification baseline
-
-Use the commands in the assigned spec. The repository-wide baseline is:
-
-```bash
-npm run lint
-npm run typecheck
-npm test
-npm run build
-```
-
-The PMTiles planet file is not required for local work. A checked-in fixture
-must prove at least one successful end-to-end tile request. Tests that accept an
-error response as success are degraded-mode checks, not delivery evidence.
-
-Green gates are the entry condition for judgement, not the finish line.
+1. Read the domain spec, its external bar, frozen contract, system rulings, and
+   directly consumed modules.
+2. Create an isolated worktree/branch from the PM's current integration point.
+3. State the owned paths and smallest independently judgeable outcome.
+4. Implement inside those paths. Test the public boundary, not just helpers.
+5. Run the spec's checks and `npm run test:architecture`. Run
+   `npm run scope:check -- <domain> <base-ref>` to reject escaped writes.
+6. Update exports/consumes if behavior changed. Ask the PM for cross-domain work
+   rather than silently widening a bubble or copying a contract.
+7. Report disagreements plainly. A bad contract remains a recorded defect;
+   do not make a workaround look like compliance.
+8. End with changed paths, exact commands/results, disagreements, and remaining
+   gaps. Commit the bounded patch. The PM integrates at a milestone.
+9. Hand the built artifact to a fresh Gauntlet critic. Do not grade yourself.
 
 ## Anti-patterns
 
 | Anti-pattern | Required response |
-|---|---|
-| A god-file owns parsing, routing, lifecycle, UI, and telemetry | Split at real responsibilities and keep one composition root |
-| Every service re-validates already parsed transport input | Parse once at the HTTP boundary; keep service contracts typed |
-| A direct handler test stands in for route reachability | Exercise the composed app |
-| A smoke check accepts 4xx/5xx for the core success path | Add a deterministic fixture-backed 2xx assertion |
-| A spec says `ready` because unit tests pass | Record actual integration evidence and remaining external blockers |
-| Pseudo-technical copy tries to sound sophisticated | Use calm, specific language a developer can act on |
-| The builder declares its own work good | Dispatch a fresh critic with the real artifact |
+| --- | --- |
+| Writing outside ownership | Split the change; PM updates contracts first |
+| A site-specific global in shared code | Instance configuration or explicit parameter |
+| Copied manifest types or broad casts | Import the frozen type; validate unknown JSON |
+| Turning any nonempty file into a "validated" archive | Parse the real format; state the verification limit |
+| Requiring billing/database for public static maps | Keep the static delivery boundary |
+| Downloading or buffering a planet to inspect its header | Bounded range reads or streaming publication |
+| Empty styles or provider fallbacks hide failure | Surface the actual error and missing dependency |
+| A fixture proves beautiful cartography | Separate transport/display proof from real-map judgement |
+| A green suite includes zero tests or skipped infrastructure | Fail that gate and name the missing evidence |
+| Builder evaluates its own report | Fresh critic inspects real artifacts |

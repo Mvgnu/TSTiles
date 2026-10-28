@@ -1,0 +1,11 @@
+{
+	# Nonroot container ports; Compose publishes these on 80 and 443.
+	http_port 8080
+	https_port 8443
+}
+
+import public.caddy
+
+{$MAPS_DOMAIN} {
+	import tstiles_public
+}

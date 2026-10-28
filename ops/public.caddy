@@ -1,0 +1,78 @@
+# Shared by the VPS and local verification configs. Keep PMTiles unencoded:
+# its byte offsets refer to the archive, not an HTTP-compressed representation.
+(tstiles_headers) {
+	header {
+		Access-Control-Allow-Origin "*"
+		Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
+		Access-Control-Allow-Headers "Range, If-Match, If-None-Match, If-Modified-Since"
+		Access-Control-Expose-Headers "Accept-Ranges, Content-Length, Content-Range, ETag, Last-Modified"
+		X-Content-Type-Options "nosniff"
+		Cache-Control "no-store"
+	}
+	# ServeContent clears ordinary cache headers for some errors (notably 416).
+	# Apply the error policy when the final status is known.
+	header Cache-Control "no-store" {
+		match status 4xx 5xx
+	}
+}
+
+(tstiles_public) {
+	root * "{$TSTILES_ROOT:./site}"
+
+	route {
+		import tstiles_headers
+
+		# Only the publication tree is served. Dot paths remain private even
+		# if accidentally copied into an otherwise public asset directory.
+		@hidden path_regexp hidden "(^|/)\."
+		respond @hidden "Not found" 404
+
+		@preflight method OPTIONS
+		header @preflight Access-Control-Max-Age "3600"
+		respond @preflight 204
+
+		@unsupported not method GET HEAD
+		header @unsupported Allow "GET, HEAD, OPTIONS"
+		respond @unsupported "Method not allowed" 405
+
+		@archive path_regexp archive "^/archives/[a-f0-9]{64}\.pmtiles$"
+		handle @archive {
+			header Content-Type "application/octet-stream"
+			header Cache-Control "public, max-age=31536000, immutable" {
+				match status 200 206 304
+			}
+			file_server
+		}
+
+		@manifest path_regexp manifest "^/maps/[a-z0-9][a-z0-9_-]{0,63}\.json$"
+		handle @manifest {
+			header Cache-Control "no-cache" {
+				match status 200 304
+			}
+			file_server
+		}
+
+		@page path / /index.html
+		handle @page {
+			header Cache-Control "no-cache" {
+				match status 200 304
+			}
+			file_server
+		}
+
+		@asset path /assets/* /styles/*
+		handle @asset {
+			header Cache-Control "public, max-age=300, must-revalidate" {
+				match status 200 206 304
+			}
+			file_server
+		}
+
+		respond "Not found" 404
+	}
+
+	handle_errors {
+		import tstiles_headers
+		respond "{err.status_code} {err.status_text}" {err.status_code}
+	}
+}
