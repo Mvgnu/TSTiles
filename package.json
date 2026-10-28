@@ -1,45 +1,42 @@
 {
-  "name": "tilesserver",
+  "name": "tstiles",
+  "version": "0.1.0",
   "private": true,
-  "type": "commonjs",
-  "version": "0.0.0",
+  "type": "module",
+  "description": "Prepare and self-host existing PMTiles archives for MapLibre websites.",
   "engines": {
-    "node": ">=20 <23"
+    "node": ">=22 <25"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "check": "npm run typecheck && npm run lint",
     "typecheck": "tsc --noEmit",
-    "test": "npm run test:platform && npm run test:domains && npm run test:app",
-    "test:app": "vitest run src/app/__tests__ --globals --passWithNoTests",
-    "test:domains": "vitest run src/domains --globals --passWithNoTests",
-    "test:platform": "vitest run src/config/__tests__ src/contracts/__tests__ --globals --passWithNoTests",
-    "test:integration:s3": "RUN_S3_COMPAT_INTEGRATION=1 vitest run src/domains/storage/__tests__/storage-s3-compatible.integration.test.ts --globals --passWithNoTests",
-    "db:push": "prisma db push --accept-data-loss --skip-generate",
-    "db:generate": "prisma generate",
-    "demo:start": "npm run db:push && npm run build && node dist/app/demo-server.js",
-    "smoke:e2e": "bash scripts/smoke-e2e.sh",
-    "readiness:check": "bash scripts/readiness-check.sh",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix"
+    "lint": "eslint src test scripts",
+    "build": "node scripts/build.mjs",
+    "test": "vitest run test/archive test/web",
+    "test:archive": "vitest run test/archive",
+    "test:web": "vitest run test/web",
+    "test:architecture": "node --test test/architecture/*.test.mjs",
+    "test:hosting": "node --test test/hosting/*.test.mjs",
+    "archive:inspect": "node dist/archive/cli.js inspect",
+    "archive:publish": "node dist/archive/cli.js publish",
+    "demo:prepare": "node scripts/prepare-demo.mjs",
+    "scope:check": "node scripts/check-scope.mjs",
+    "test:browser": "node scripts/browser-smoke.mjs"
+  },
+  "dependencies": {
+    "maplibre-gl": "^5.15.0",
+    "pmtiles": "4.3.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.3",
-    "@prisma/client": "^6.19.2",
-    "@types/node": "^25.3.0",
+    "@types/node": "^22.19.0",
+    "esbuild": "^0.25.12",
     "eslint": "^9.39.3",
     "globals": "^17.4.0",
-    "prisma": "^6.19.2",
+    "playwright": "1.58.2",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.56.1",
-    "vitest": "^4.0.18"
-  },
-  "dependencies": {
-    "@aws-sdk/client-s3": "^3.1002.0",
-    "@node-rs/argon2": "^2.2.0",
-    "pmtiles": "^4.3.0",
-    "sharp": "^0.34.5"
-  },
-  "optionalDependencies": {
-    "@maplibre/maplibre-gl-native": "^6.4.1"
+    "vitest": "^4.0.18",
+    "yaml": "^2.8.2"
   }
 }

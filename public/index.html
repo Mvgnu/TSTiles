@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>TSTiles · Self-hosted maps</title>
+    <link rel="stylesheet" href="./assets/maplibre-gl.css">
+    <link rel="stylesheet" href="./assets/viewer.css">
+    <script type="module" src="./assets/viewer.js"></script>
+  </head>
+  <body>
+    <header class="site-header chrome">
+      <a class="wordmark" href="./" aria-label="TSTiles home"><span class="brand-icon" aria-hidden="true">↗</span>TSTiles</a>
+      <span class="header-note">Self-hosted maps</span>
+    </header>
+    <main>
+      <section class="intro chrome" aria-labelledby="map-name">
+        <p class="eyebrow">Your map. Your files.</p>
+        <h1 id="map-name">A map of your own.</h1>
+        <p class="lede">Load an archive from your host, inspect its data, and bring the map to your sites.</p>
+      </section>
+      <div class="workspace">
+        <section class="map-panel" aria-label="Interactive map">
+          <div class="map-toolbar">
+            <span id="map-mode" class="mode-label">Map viewer</span>
+            <button id="reset-view" class="quiet-button" type="button">Reset view <span aria-hidden="true">↺</span></button>
+          </div>
+          <div id="map" role="region" aria-label="Map. Use arrow keys to pan and plus or minus to zoom." data-state="loading"></div>
+          <div class="map-feedback">
+            <span id="status-badge" class="status-badge" data-state="loading">Loading</span>
+            <p id="map-status" role="status" aria-live="polite" data-state="loading">Loading map manifest…</p>
+            <button id="retry-map" class="quiet-button" type="button">Retry</button>
+          </div>
+          <p id="preview-note" class="preview-note">The archive and its style will determine what this map can show.</p>
+        </section>
+        <aside class="details-panel chrome" aria-labelledby="details-title">
+          <p class="eyebrow">Behind this map</p>
+          <h2 id="details-title">One archive. Any site.</h2>
+          <p class="detail-copy">Tiles are read as needed. The browser draws the map.</p>
+          <dl class="facts">
+            <div><dt>Archive size</dt><dd id="archive-size">—</dd></div>
+            <div><dt>Stored zooms</dt><dd id="archive-zoom">—</dd></div>
+            <div><dt>Source layers</dt><dd id="archive-layers">—</dd></div>
+          </dl>
+          <h3>Layers in the archive</h3>
+          <ul id="layer-list" class="layer-list"><li>Waiting for the manifest…</li></ul>
+          <h3>Attribution</h3>
+          <p id="archive-attribution" class="attribution-copy">Attribution will appear when the manifest loads.</p>
+        </aside>
+      </div>
+      <div class="tools-grid chrome">
+        <section class="tool-panel" aria-labelledby="load-title">
+          <p class="eyebrow">Choose your data</p>
+          <h2 id="load-title">Load another map</h2>
+          <p>Use a map manifest published by the archive tool. Its URLs can point to this host or another one.</p>
+          <form id="manifest-form">
+            <label for="manifest-url">Manifest URL</label>
+            <div class="input-row">
+              <input id="manifest-url" name="manifest" type="url" required spellcheck="false" autocomplete="off" placeholder="https://maps.example.com/maps/my-map.json">
+              <button class="primary-button" type="submit">Load map</button>
+            </div>
+          </form>
+        </section>
+        <section class="tool-panel" aria-labelledby="embed-title">
+          <div class="section-heading"><div><p class="eyebrow">Bring it with you</p><h2 id="embed-title">Embed this map</h2></div><button id="copy-embed" class="quiet-button copy-button" type="button" disabled>Copy code</button></div>
+          <p>Paste this into another site. Each embed can use its own manifest.</p>
+          <pre tabindex="0" aria-label="HTML embed code"><code id="embed-code">The embed code will appear when the manifest loads.</code></pre>
+        </section>
+      </div>
+    </main>
+    <footer class="site-footer chrome"><span>Files on your host. Maps in your browser.</span><span>Built with <a href="https://docs.protomaps.com/pmtiles/" target="_blank" rel="noopener noreferrer">PMTiles</a> &amp; <a href="https://maplibre.org/" target="_blank" rel="noopener noreferrer">MapLibre</a>.</span></footer>
+    <noscript><p class="noscript">This interactive map needs JavaScript. Enable it to load the PMTiles archive in your browser.</p></noscript>
+  </body>
+</html>
