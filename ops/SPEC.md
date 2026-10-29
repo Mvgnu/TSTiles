@@ -11,9 +11,12 @@ exports:
   - Caddy deployment
   - nginx production site (itstiles.com) and route snippets (ops/nginx/)
   - hosting runbook
+  - one-planet operator script ops/planet-update.mjs (status, snapshot, update, rollback)
   - HTTP verification (Caddy and nginx)
 consumes:
   - archive publication layout
+  - archive CLI publish --link (dist/archive/cli.js)
+  - web style CLI (dist/web/styles-cli.js)
   - web static build
 verification:
   check: npm run check
@@ -58,6 +61,16 @@ snippet. `test/hosting/nginx.test.mjs` runs real nginx (`NGINX_BIN`) against the
 route snippet unmodified, and validates/runs path-rewritten copies of the site
 and bootstrap files with a throwaway certificate; it fails when nginx is missing.
 
+`ops/planet-update.mjs` is the one-planet update/rollback procedure for that
+host: it picks plan two (room for two archives, no downtime) or plan one
+(delete first, stated outage, requires `--allow-outage`). It verifies the
+build-list size/MD5 and that the build is still downloadable, publishes every
+manifest id with `--link`, and regenerates styles. It swaps archive -> styles ->
+manifests, snapshots and restores `maps/*.json` together with
+`styles/protomaps/*.json`, and verifies on disk and over HTTP.
+`test/hosting/planet-update.test.mjs` drives it against a scratch volume
+served by real nginx, with two archives derived from the one-tile fixture.
+
 ## Known gaps
 
 Local HTTP evidence cannot prove a production TLS/domain configuration, real
@@ -74,3 +87,11 @@ nginx's first header pass plus `no-store` (no-store governs), and a 206 carries
 no `Accept-Ranges`; both differ from Caddy byte-for-byte. The real certificate,
 DNS, Cloudflare proxying, HTTP/2 and the live 139 GB archive are proved only by
 the PM's checks against https://itstiles.com.
+
+One-planet gaps: the script has not run against the live 139 GB planet. The
+outage estimate (about 1 hour) comes from the 2026-10-29 manual deployment's
+timings, not from a script run. The test archives copy the fixture's tile
+bytes and declare the Protomaps layer ids in metadata only, so they prove
+digest wiring through publish/styles/manifests, not cartography. Each manifest
+id costs one full sha256 pass (6 x ~5.5 min on the planet) because the archive
+CLI has no "reuse a verified digest" option; that dominates plan one's outage.

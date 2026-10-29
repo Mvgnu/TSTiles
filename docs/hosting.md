@@ -199,6 +199,10 @@ The admin port is reachable only inside the container. Changing `.env` requires
 
 ## 4. Update and roll back without mixing archive versions
 
+This section is for a generic Compose host with spare disk and one manifest.
+On itstiles.com (one planet, generated flavour styles) use
+[One planet: update and rollback](#one-planet-update-and-rollback) instead.
+
 Never replace bytes under an existing digest URL. On your build machine,
 publish the next archive to `site/` with the same map ID. Copy its new archive
 and any new style resources first. A new style should have a versioned path
@@ -320,18 +324,139 @@ taken from Cloudflare's published ranges. If the record is later proxied:
 - Do not enable features that transform responses (Polish, Mirage, Rocket
   Loader, Email Obfuscation, compression rules for `application/octet-stream`).
   Re-run the curl checks below through the proxy; they must stay identical.
+- Set **Caching → Configuration → Browser Cache TTL** to **Respect Existing
+  Headers**. The live zone currently overrides `/assets/**` and `/styles/**` to
+  `Cache-Control: max-age=14400`, so a regenerated style can stay in browsers
+  for four hours instead of five minutes.
+- Cloudflare brotli-encodes `.pbf` glyphs on the way out. Browsers decode this
+  transparently, so maps are unaffected, but the response differs from the
+  origin's (`Content-Encoding: br` through the proxy, none from nginx).
 - Refresh the real-IP ranges when Cloudflare changes them.
 
-### One planet: capacity and updates
+### Deploy the tooling to /mnt/tstiles/app
 
-The 147 GB volume holds one planet archive (about 139 GB). Publication must not
-copy it: the archive publisher's same-filesystem hard-link mode links the file
-to `archives/<sha256>.pmtiles` and writes the manifest last. Updating the planet
-therefore needs either a larger volume or a deliberate removal of the old
-archive first, which breaks pages still using it until they reload the
-manifest. That retention choice is the operator's; the general update section
-above (keep old archives) assumes spare space this host does not have. Embed
-maps through `/maps/<id>.json` or a served style, never a hard-coded digest URL.
+The operator tools run from a checkout on the publication volume. Sync only
+source (never secrets, Git data, dependencies, build output or archives), then
+build on the VPS:
+
+```sh
+rsync -a --delete \
+  --exclude=.env --exclude=.git --exclude=node_modules --exclude=legacy \
+  --exclude=.claude --exclude=site --exclude=dist \
+  ./ root@87.58.154.89:/mnt/tstiles/app/
+ssh root@87.58.154.89 'cd /mnt/tstiles/app && npm ci && npm run build'
+```
+
+This produces `dist/archive/cli.js` and `dist/web/styles-cli.js`, which
+`ops/planet-update.mjs` calls. The `site/` it builds inside the checkout is not
+the served tree.
+
+### One planet: update and rollback
+
+The 147 GB volume holds one planet (about 139 GB), with about 17 GB free.
+Every manifest (`maps/planet.json` and the five flavours `light`, `dark`,
+`white`, `grayscale`, `black`) **and** every generated style
+(`styles/protomaps/<flavor>.json`, whose `sources.protomaps.url` contains the
+archive digest) must name the same archive. An update or rollback therefore
+always moves styles and manifests together. Section 4's manifest-only rollback
+is not enough on this host. Embed maps through `/maps/<id>.json` or a served
+style, never a hard-coded digest URL.
+
+`ops/planet-update.mjs` (in `/mnt/tstiles/app/ops/`) runs every step in a
+fixed order. Its defaults are this host's paths: `SITE=/mnt/tstiles/site`,
+`INCOMING=/mnt/tstiles/incoming`, `SNAPSHOTS=/mnt/tstiles/snapshots`,
+`APP=/mnt/tstiles/app`, `PUBLIC_BASE=https://itstiles.com`, `BASE_ID=planet`,
+`FLAVORS="light dark white grayscale black"`. The steps:
+
+1. **Free-space check.** It reads the build's size and MD5 from
+   `https://build-metadata.protomaps.dev/builds.json` and then chooses a plan:
+   - **Plan two**, when the new archive and `RESERVE_BYTES` (2 GiB) fit next to
+     the old one: download alongside, publish, swap, then delete the old
+     archive (or keep it with `--keep-old`). No downtime.
+   - **Plan one**, when only deleting the current archive makes room. This is
+     the only plan possible on this volume. The script refuses plan one
+     without `--allow-outage`, and refuses outright when even plan one does
+     not fit.
+2. **Snapshot.** It copies `maps/*.json` and `styles/protomaps/*.json` into
+   `SNAPSHOTS/<UTC time>-before-<date>/` (about 400 kB).
+3. **Plan one only: deletes the live archive.** **The maps are down from here
+   until step 7.** Measured on 2026-10-29, that takes about **1 hour**:
+   download 19 min at 118 MiB/s, MD5 6 min, and one sha256 pass of about
+   5.5 min per manifest id (6 ids).
+4. **Download** `https://build.protomaps.com/<date>.pmtiles` into `INCOMING`
+   (aria2c, resumable). Then it checks the size and the base64 MD5 from the
+   build list.
+5. **Publish `planet`** with `archive:publish … --link` into
+   `INCOMING/stage-<date>/` (no bytes copied), then hard-link the archive into
+   `site/archives/`. **The archive comes first.**
+6. **Regenerate the five styles** from the staged manifest
+   (`styles-cli --manifest … --manifest-public-url https://itstiles.com/maps/planet.json --assets-base https://itstiles.com/styles`).
+   Then it publishes each flavour id with `--style ../styles/protomaps/<flavor>.json --link`.
+7. **Swap**: it renames the styles into `site/styles/protomaps/` first, then
+   the manifests into `site/maps/` **last**. Each file swap is atomic.
+8. **Clean up**: it removes the staging directory and the downloaded name in
+   `INCOMING`, so the published archive has exactly one name. It records the
+   build in `SNAPSHOTS/current.json`.
+9. **Verify**: every manifest and style names the new digest and the archive
+   exists. Over HTTP, each manifest and style is served with that digest, and
+   `Range: bytes=0-126` on the archive returns `206`, 127 bytes, `PMTiles`, and
+   no encoding. A failure exits non-zero.
+
+If a plan-one run fails after the deletion, the script says the maps are down.
+Re-running the same command resumes the download.
+
+Run it on the VPS inside `tmux`/`screen` (it outlives an SSH session):
+
+```sh
+cd /mnt/tstiles/app
+node ops/planet-update.mjs status                     # current build, digests, free space, HTTP checks
+curl -fsS https://build-metadata.protomaps.dev/builds.json | node -e \
+  'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>JSON.parse(s).slice(-5).forEach(b=>console.log(b.key,b.size,b.md5sum)))'
+DATE=YYYYMMDD                                         # a build from that list
+curl -fsSI "https://build.protomaps.com/$DATE.pmtiles" | head -1   # listed AND downloadable?
+node ops/planet-update.mjs update "$DATE" --dry-run  # prints sizes, plan, outage; changes nothing
+node ops/planet-update.mjs update "$DATE" --plan one --allow-outage
+node ops/planet-update.mjs status
+```
+
+Then run the curl checks under "Verify the live host" below against the new
+digest. Purge or wait out any Cloudflare copies of `/styles/protomaps/*.json`
+if the zone is proxied. A manual snapshot at any time is
+`node ops/planet-update.mjs snapshot <label>`.
+
+**Rollback.** `node ops/planet-update.mjs rollback <snapshot-name>` (names are
+listed by `status`). First it snapshots the current state. Then it restores
+`styles/protomaps/*.json` and only then `maps/*.json`. It works only while
+every archive the snapshot names is still in `site/archives/`. That is true
+after a plan-two update with `--keep-old`, or for a style/manifest-only
+change. After a plan-one update the old archive is gone, and the script
+refuses rather than restoring pointers to a missing file. **A data rollback
+needs the old bytes again:**
+
+- Re-download the previous build with
+  `node ops/planet-update.mjs update <old-date> --plan one --allow-outage`.
+  The downtime is the same as an update, about 1 hour. This works only while
+  Protomaps still serves that build: daily builds disappear after roughly a
+  week (on 2026-10-29, 20261028 and 20261025 answered 200; 20261022 answered
+  404), and being listed in `builds.json` does not guarantee a download.
+  Check with `curl -I` first.
+- Alternatively, keep a copy on a second volume on the same filesystem (or
+  grow this one) so that plan two with `--keep-old` applies. With that, a
+  rollback is instant and has no downtime.
+
+The procedure is exercised by `test/hosting/planet-update.test.mjs`. It runs
+the script with these environment variables against a scratch directory served
+by real nginx, using two small fixture-derived archives:
+- first publication;
+- plan-two update with `--keep-old`;
+- rollback;
+- every refusal: outage not accepted, no space, bad MD5, unlisted build,
+  build already current;
+- plan-one update;
+- refused rollback to a deleted archive, then re-download recovery.
+
+After each step it checks `.archive` in every manifest and
+`.sources.protomaps.url` in every style.
 
 ### Verify the live host
 
@@ -342,7 +467,7 @@ curl -sS -D - -o /tmp/h.bin -H 'Origin: https://your-site.example' \
   -H 'Accept-Encoding: gzip, br' -r 0-126 "$ARCHIVE"; wc -c /tmp/h.bin
 curl -sS -D - -o /dev/null -X OPTIONS -H 'Origin: https://your-site.example' \
   -H 'Access-Control-Request-Method: GET' -H 'Access-Control-Request-Headers: range' "$ARCHIVE"
-curl -sS -D - -o /dev/null https://itstiles.com/maps/basemap.json
+curl -sS -D - -o /dev/null https://itstiles.com/maps/planet.json
 curl -sS -D - -o /dev/null https://itstiles.com/.env
 curl -sS -D - -o /dev/null http://itstiles.com/ ; curl -sS -D - -o /dev/null https://www.itstiles.com/
 ```
