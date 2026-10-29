@@ -37,9 +37,16 @@ try {
   const site = join(work, "site");
   await mkdir(site);
   await cp(resolve(root, "site/assets"), join(site, "assets"), { recursive: true });
-  await cp(resolve(root, "site/index.html"), join(site, "index.html"));
+  for (const page of ["index.html", "impressum.html", "datenschutz.html", "nutzungsbedingungen.html"]) {
+    await cp(resolve(root, "site", page), join(site, page));
+  }
   const { manifest } = await publishArchive(resolve(root, "test/fixtures/one-tile.pmtiles"), {
     outDir: site, id: "fixture", name: "Browser test fixture",
+    attribution: "Delivery test fixture — not a geographical basemap",
+  });
+  // The landing page's hero loads ./maps/light.json; here it is the fixture (data preview style).
+  await publishArchive(resolve(root, "test/fixtures/one-tile.pmtiles"), {
+    outDir: site, id: "light", name: "Browser test fixture",
     attribution: "Delivery test fixture — not a geographical basemap",
   });
   const reservation = createServer();
@@ -82,19 +89,23 @@ try {
       if (response.url().endsWith(".pmtiles")) ranges.push({ status: response.status(), headers: response.headers() });
     });
     await page.goto(base);
-    await page.locator('#map[data-state="ready"]').waitFor({ timeout: 20000 });
-    assert.ok(Number(await page.locator("#map").getAttribute("data-visible-features")) > 0);
-    assert.match(await page.locator(".maplibregl-ctrl-attrib").innerText(), /Delivery test fixture/);
-    assert.match(await page.locator("#preview-note").innerText(), /not a finished basemap/);
+    // The hero centres Tübingen; the one-polygon fixture lies at 0°/0°, so "empty" is the honest settled state here.
+    await page.locator('#hero-map:is([data-state="ready"], [data-state="empty"])').waitFor({ timeout: 20000 });
+    assert.match(await page.locator("#hero-map .maplibregl-ctrl-attrib").innerText(), /Delivery test fixture/);
+    assert.equal(await page.locator("#hero-map .maplibregl-compact").count(), 0, "Attribution must not collapse");
     assert.deepEqual(external, [], "Default map must not fetch hidden provider assets");
     assert.deepEqual(failures, []);
     assert.ok(ranges.some((response) => response.status === 206 && response.headers["content-range"]));
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Page overflows its viewport");
     await page.getByRole("button", { name: "Zoom in", exact: true }).click();
-    await page.getByRole("button", { name: /Reset view/ }).click();
-    await page.locator('#map[data-state="ready"]').waitFor();
-    await page.screenshot({ path: join(output, `viewer-${viewport.width}.png`), fullPage: true });
-    evidence.pages.push({ viewport, visibleFeatures: Number(await page.locator("#map").getAttribute("data-visible-features")), archiveResponses: ranges.length });
+    await page.locator('#hero-map:is([data-state="ready"], [data-state="empty"])').waitFor();
+    await page.screenshot({ path: join(output, `landing-${viewport.width}.png`), fullPage: true });
+    for (const legal of ["impressum", "datenschutz", "nutzungsbedingungen"]) {
+      const response = await page.goto(`${base}/${legal}.html`);
+      assert.equal(response?.status(), 200, legal);
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${legal} overflows`);
+    }
+    evidence.pages.push({ viewport, archiveResponses: ranges.length });
     await page.close();
   }
 
@@ -120,11 +131,25 @@ try {
       response.end(JSON.stringify({ ...manifest, id: url.pathname === "/a.json" ? "a" : "b", name: `Independent ${url.pathname}`, archive: new URL(manifest.archive, `${base}/maps/fixture.json`).href }));
       return;
     }
+    if (url.pathname === "/case") {
+      // One createMapViewer per failure case, exactly as an integrating site calls it.
+      response.setHeader("Content-Type", "text/html");
+      response.end(`<!doctype html><title>Failure case</title>
+        <link rel="stylesheet" href="${base}/assets/maplibre-gl.css">
+        <div id="map" style="height:400px"></div><p id="map-status"></p>
+        <script type="module">
+          import { createMapViewer } from '${base}/assets/embed.js';
+          const line = document.getElementById("map-status");
+          createMapViewer({ container: "map", manifestUrl: new URLSearchParams(location.search).get("manifest"),
+            onStatus: (status) => { line.textContent = status.message; document.getElementById("map").dataset.state = status.state; } })
+            .catch(() => undefined);
+        </script>`);
+      return;
+    }
     response.setHeader("Content-Type", "text/html");
     response.end(`<!doctype html><title>Independent consuming site</title>
       <link rel="stylesheet" href="${base}/assets/maplibre-gl.css">
       <div id="a" style="height:300px"></div><div id="b" style="height:300px"></div>
-      <iframe title="Iframe integration" src="${base}/?embed=1&manifest=${encodeURIComponent(`${base}/maps/fixture.json`)}" width="390" height="420"></iframe>
       <script type="module">
         import { createMapViewer } from '${base}/assets/embed.js';
         window.checks = { states: {}, viewers: [] };
@@ -148,18 +173,17 @@ try {
   await page.waitForFunction((initial) => window.checks.viewers[0].map.getZoom() > initial, before[0].zoom);
   const after = await page.evaluate(() => window.checks.viewers.map((viewer) => viewer.map.getZoom()));
   assert.equal(after[1], before[1].zoom, "Zooming one map must not change another instance");
-  const frame = page.frameLocator('iframe[title="Iframe integration"]');
-  await frame.locator('#map[data-state="ready"]').waitFor({ timeout: 20000 });
   await page.screenshot({ path: join(output, "second-site.png"), fullPage: true });
   evidence.crossOrigin = true;
   evidence.independentInstances = true;
-  await page.goto(`${base}/?manifest=./maps/does-not-exist.json`);
+  await page.goto(`http://127.0.0.1:${consumerPort}/case?manifest=${encodeURIComponent(`${base}/maps/does-not-exist.json`)}`);
   await page.locator('#map[data-state="error"]').waitFor({ timeout: 10000 });
   assert.match(await page.locator("#map-status").innerText(), /HTTP 404/);
+  assert.match(await page.locator("#map .tstiles-error").innerText(), /HTTP 404/);
   await page.screenshot({ path: join(output, "missing-manifest.png"), fullPage: true });
   evidence.missingManifest = true;
   for (const kind of ["empty", "wrong"]) {
-    await page.goto(`${base}/?manifest=${encodeURIComponent(`http://127.0.0.1:${consumerPort}/${kind}.json`)}`);
+    await page.goto(`http://127.0.0.1:${consumerPort}/case?manifest=${encodeURIComponent(`./${kind}.json`)}`);
     await page.waitForFunction(() => {
       const state = document.querySelector("#map")?.getAttribute("data-state");
       return state && state !== "loading";
