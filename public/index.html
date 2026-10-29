@@ -1,76 +1,139 @@
 <!doctype html>
-<html lang="en">
+<html lang="de">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="light">
-    <title>TSTiles · Self-hosted maps</title>
+    <title>itstiles.com · Map Tiles kostenlos – in Deutschland gehostet</title>
+    <meta name="description" content="Kostenlose Vektorkarten für Ihre Website: weltweite OpenStreetMap-Kacheln, ohne Login und ohne API-Key, Server in Frankfurt am Main, keine Cookies, kein Tracking.">
+    <link rel="canonical" href="https://itstiles.com/">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://itstiles.com/">
+    <meta property="og:site_name" content="itstiles.com">
+    <meta property="og:locale" content="de_DE">
+    <meta property="og:title" content="Map Tiles kostenlos – in Deutschland gehostet">
+    <meta property="og:description" content="Weltweite Vektorkarten aus OpenStreetMap-Daten. Kein Login, kein API-Key, keine Cookies. Einbinden in einer Minute.">
+    <meta name="theme-color" content="#f4f1e8">
     <link rel="icon" href="./assets/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="./assets/maplibre-gl.css">
-    <link rel="stylesheet" href="./assets/viewer.css">
+    <link rel="stylesheet" href="./assets/site.css">
     <script type="module" src="./assets/viewer.js"></script>
   </head>
   <body>
-    <header class="site-header chrome">
-      <a class="wordmark" href="./" aria-label="TSTiles home"><span class="brand-icon" aria-hidden="true">↗</span>TSTiles</a>
-      <span class="header-note">Self-hosted maps</span>
+    <a class="skip" href="#inhalt">Zum Inhalt</a>
+    <header class="masthead">
+      <a class="wordmark" href="./"><img src="./assets/favicon.svg" alt="" width="26" height="26"><b>itstiles<span>.com</span></b></a>
+      <nav aria-label="Hauptnavigation">
+        <a href="#einbinden">Einbinden</a>
+        <a class="wide" href="https://github.com/Mvgnu/TSTiles/blob/main/docs/styleguide.md">Styleguide</a>
+        <a href="https://github.com/Mvgnu/TSTiles/blob/main/docs/integration.md">Anleitung</a>
+      </nav>
     </header>
-    <main>
-      <section class="intro chrome" aria-labelledby="map-name">
-        <p class="eyebrow">Your map. Your files.</p>
-        <h1 id="map-name">A map of your own.</h1>
-        <p class="lede">Load an archive from your host, inspect its data, and bring the map to your sites.</p>
+
+    <main id="inhalt">
+      <section class="hero" aria-labelledby="titel">
+        <p class="eyebrow">Vektorkarten · OpenStreetMap · Frankfurt am Main</p>
+        <h1 id="titel">Map Tiles kostenlos&nbsp;–<br><em>in Deutschland gehostet.</em></h1>
+        <p class="lede">Eine vollständige Weltkarte für Ihre Website. Ohne Konto, ohne API-Key, ohne Cookies. Einfach URL einsetzen.</p>
+        <div class="hero-actions">
+          <a class="button solid" href="#einbinden">In 1 Minute einbinden</a>
+          <a class="button" href="https://github.com/Mvgnu/TSTiles/blob/main/docs/integration.md">Anleitung lesen ↗</a>
+        </div>
+
+        <figure class="sheet" aria-label="Live-Karte">
+          <div id="hero-map" class="sheet-map" role="region" aria-label="Interaktive Karte von Tübingen. Mit Strg/⌘ und Mausrad oder den Plus-/Minus-Schaltflächen zoomen."></div>
+          <figcaption class="sheet-legend">
+            <fieldset class="flavors">
+              <legend>Stil</legend>
+              <label><input type="radio" name="flavor" value="light" checked><span class="swatch light" aria-hidden="true"></span>Hell</label>
+              <label><input type="radio" name="flavor" value="dark"><span class="swatch dark" aria-hidden="true"></span>Dunkel</label>
+              <label><input type="radio" name="flavor" value="white"><span class="swatch white" aria-hidden="true"></span>Weiß</label>
+              <label><input type="radio" name="flavor" value="grayscale"><span class="swatch grayscale" aria-hidden="true"></span>Grau</label>
+              <label><input type="radio" name="flavor" value="black"><span class="swatch black" aria-hidden="true"></span>Schwarz</label>
+            </fieldset>
+            <p class="readout"><span id="map-coords">48,5216° N · 9,0576° O · Zoom 12,5</span><span id="map-status" role="status" aria-live="polite" data-state="loading">Karte wird geladen …</span></p>
+          </figcaption>
+        </figure>
       </section>
-      <div class="workspace">
-        <section class="map-panel" aria-label="Interactive map">
-          <div class="map-toolbar">
-            <span id="map-mode" class="mode-label">Map viewer</span>
-            <button id="reset-view" class="quiet-button" type="button">Reset view <span aria-hidden="true">↺</span></button>
-          </div>
-          <div id="map" role="region" aria-label="Map. Use arrow keys to pan and plus or minus to zoom." data-state="loading"></div>
-          <div class="map-feedback">
-            <span id="status-badge" class="status-badge" data-state="loading">Loading</span>
-            <p id="map-status" role="status" aria-live="polite" data-state="loading">Loading map manifest…</p>
-            <button id="retry-map" class="quiet-button" type="button">Retry</button>
-          </div>
-          <p id="preview-note" class="preview-note">The archive and its style will determine what this map can show.</p>
-        </section>
-        <aside class="details-panel chrome" aria-labelledby="details-title">
-          <p class="eyebrow">Behind this map</p>
-          <h2 id="details-title">One archive. Any site.</h2>
-          <p class="detail-copy">Tiles are read as needed. The browser draws the map.</p>
-          <dl class="facts">
-            <div><dt>Archive size</dt><dd id="archive-size">—</dd></div>
-            <div><dt>Stored zooms</dt><dd id="archive-zoom">—</dd></div>
-            <div><dt>Source layers</dt><dd id="archive-layers">—</dd></div>
-          </dl>
-          <h3>Layers in the archive</h3>
-          <ul id="layer-list" class="layer-list"><li>Waiting for the manifest…</li></ul>
-          <h3>Attribution</h3>
-          <p id="archive-attribution" class="attribution-copy">Attribution will appear when the manifest loads.</p>
-        </aside>
-      </div>
-      <div class="tools-grid chrome">
-        <section class="tool-panel" aria-labelledby="load-title">
-          <p class="eyebrow">Choose your data</p>
-          <h2 id="load-title">Load another map</h2>
-          <p>Use a map manifest published by the archive tool. Its URLs can point to this host or another one.</p>
-          <form id="manifest-form">
-            <label for="manifest-url">Manifest URL</label>
-            <div class="input-row">
-              <input id="manifest-url" name="manifest" type="url" required spellcheck="false" autocomplete="off" placeholder="https://maps.example.com/maps/my-map.json">
-              <button class="primary-button" type="submit">Load map</button>
-            </div>
-          </form>
-        </section>
-        <section class="tool-panel" aria-labelledby="embed-title">
-          <div class="section-heading"><div><p class="eyebrow">Bring it with you</p><h2 id="embed-title">Embed this map</h2></div><button id="copy-embed" class="quiet-button copy-button" type="button" disabled>Copy code</button></div>
-          <p>Paste this into another site. Each embed can use its own manifest.</p>
-          <pre tabindex="0" aria-label="HTML embed code"><code id="embed-code">The embed code will appear when the manifest loads.</code></pre>
-        </section>
-      </div>
+
+      <section class="section" aria-labelledby="legende">
+        <div class="section-head">
+          <p class="eyebrow">Legende</p>
+          <h2 id="legende">Was Sie bekommen</h2>
+        </div>
+        <ul class="points">
+          <li>
+            <h3><span class="mark" aria-hidden="true">01</span>Kostenlos</h3>
+            <p>Keine Rechnung, kein Abo, kein Kontingent. Die einzige Bedingung: der sichtbare Link auf itstiles.com in der Kartenzuschreibung.</p>
+          </li>
+          <li>
+            <h3><span class="mark" aria-hidden="true">02</span>Kein Login, kein API-Key</h3>
+            <p>Keine Registrierung und keine Schlüssel im Quellcode. Eine öffentliche URL genügt.</p>
+          </li>
+          <li>
+            <h3><span class="mark" aria-hidden="true">03</span>Die ganze Welt, z0–15</h3>
+            <p>Vektorkacheln für den gesamten Planeten aus OpenStreetMap-Daten (Protomaps-Basemap), bis Zoomstufe 15 und darüber scharf vergrößert.</p>
+          </li>
+          <li>
+            <h3><span class="mark" aria-hidden="true">04</span>DSGVO-freundlich</h3>
+            <p>Keine Cookies, kein Tracking, keine Analytics. Schriften und Symbole liefert itstiles.com selbst. Server in Frankfurt am Main, ausgeliefert über Cloudflare.</p>
+          </li>
+        </ul>
+      </section>
+
+      <section class="section" id="einbinden" aria-labelledby="einbinden-titel">
+        <div class="section-head">
+          <p class="eyebrow">Einbinden</p>
+          <h2 id="einbinden-titel">In 1 Minute eingebunden</h2>
+          <p class="lede">Kopieren, einfügen, Koordinaten anpassen. Die Karte lädt nur die Kacheln, die gerade zu sehen sind.</p>
+        </div>
+        <div class="snippets">
+          <article class="snippet">
+            <header><h3>HTML · jede Website</h3><button class="button copy" type="button" data-copy="snippet-html">Kopieren</button></header>
+            <p>Ohne Build-Schritt. Fehler erscheinen direkt in der Karte.</p>
+<pre><code id="snippet-html">&lt;link rel="stylesheet" href="https://itstiles.com/assets/maplibre-gl.css"&gt;
+&lt;div id="karte" style="height:420px"&gt;&lt;/div&gt;
+&lt;script type="module"&gt;
+  import { createMapViewer } from "https://itstiles.com/assets/embed.js";
+  createMapViewer({
+    container: "karte",
+    manifestUrl: "https://itstiles.com/maps/light.json",
+    center: [9.0576, 48.5216], // [Länge, Breite]: Tübingen
+    zoom: 13,
+    cooperativeGestures: true,
+  }).catch((error) =&gt; console.error(error));
+&lt;/script&gt;</code></pre>
+          </article>
+          <article class="snippet">
+            <header><h3>npm · React, Next.js, Vite</h3><button class="button copy" type="button" data-copy="snippet-npm">Kopieren</button></header>
+            <p>Mit eigenem MapLibre. In React im <code>useEffect</code> erstellen und mit <code>map.remove()</code> aufräumen.</p>
+<pre><code id="snippet-npm">// npm i -E maplibre-gl@5.24.0 pmtiles@4.3.0
+import maplibregl from "maplibre-gl";
+import { Protocol } from "pmtiles";
+import "maplibre-gl/dist/maplibre-gl.css";
+
+maplibregl.addProtocol("pmtiles", new Protocol().tile); // einmal pro Seite
+
+export const map = new maplibregl.Map({
+  container: "karte", // braucht eine Höhe, z. B. 420px
+  style: "https://itstiles.com/styles/protomaps/light.json",
+  center: [9.0576, 48.5216], // [Länge, Breite]: Tübingen
+  zoom: 13,
+  cooperativeGestures: true,
+});</code></pre>
+          </article>
+        </div>
+        <p class="condition"><strong>Die eine Bedingung:</strong> Lassen Sie die Kartenzuschreibung sichtbar. Sie enthält automatisch den Link auf itstiles.com sowie Protomaps und OpenStreetMap. Details in den <a href="./nutzungsbedingungen">Nutzungsbedingungen</a>.</p>
+        <p class="more">
+          <a href="https://github.com/Mvgnu/TSTiles/blob/main/docs/integration.md">Vollständige Anleitung: eigene Daten, Next.js, CSP, Dark Mode ↗</a>
+          <a href="https://github.com/Mvgnu/TSTiles/blob/main/docs/styleguide.md">Eigene Kartenstile gestalten ↗</a>
+        </p>
+      </section>
     </main>
-    <footer class="site-footer chrome"><span>Files on your host. Maps in your browser.</span><span>Built with <a href="https://docs.protomaps.com/pmtiles/" target="_blank" rel="noopener noreferrer">PMTiles</a> &amp; <a href="https://maplibre.org/" target="_blank" rel="noopener noreferrer">MapLibre</a>.</span></footer>
-    <noscript><p class="noscript">This interactive map needs JavaScript. Enable it to load the PMTiles archive in your browser.</p></noscript>
+
+    <footer class="colophon">
+      <span>itstiles.com · Kartendaten © OpenStreetMap-Mitwirkende (ODbL) · Basemap: Protomaps</span>
+      <nav aria-label="Rechtliches"><a href="./impressum">Impressum</a><a href="./datenschutz">Datenschutz</a><a href="./nutzungsbedingungen">Nutzungsbedingungen</a></nav>
+    </footer>
+    <noscript><p class="condition" style="margin:24px auto;width:var(--page)">Die Live-Karte braucht JavaScript.</p></noscript>
   </body>
 </html>

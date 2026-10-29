@@ -7,6 +7,7 @@ import type { MapManifest } from "../../src/contract.js";
 import {
   BASEMAPS_VERSION,
   DEFAULT_ATTRIBUTION,
+  DEFAULT_ATTRIBUTION_HTML,
   PROTOMAPS_FLAVORS,
   StyleBuildError,
   buildBasemapStyle,
@@ -14,6 +15,7 @@ import {
   parseAssetsBase,
   parseFlavors,
   parseLanguage,
+  renderAttribution,
   requiredSourceLayers,
   styleProblems,
 } from "../../src/web/basemap.js";
@@ -83,8 +85,10 @@ describe("basemap style inputs", () => {
     expect(() => parseStylesArgs(["--manifest", "m.json", ...base])).toThrow(/--manifest-public-url/u);
     expect(() => parseStylesArgs(["--archive-url", ARCHIVE, "--bogus", "1", ...base])).toThrow(StyleBuildError);
     expect(parseStylesArgs(["--archive-url", ARCHIVE, ...base])).toMatchObject({
-      flavors: [...PROTOMAPS_FLAVORS], lang: "en", attribution: DEFAULT_ATTRIBUTION,
+      flavors: [...PROTOMAPS_FLAVORS], lang: "en", extraAttribution: undefined,
     });
+    expect(parseStylesArgs(["--archive-url", ARCHIVE, "--attribution", "Daten: Stadt", ...base]).extraAttribution).toBe("Daten: Stadt");
+    expect(() => parseStylesArgs(["--archive-url", ARCHIVE, "--attribution", "a\u0007b", ...base])).toThrow(/control characters/u);
   });
 });
 
@@ -97,8 +101,8 @@ describe("generated Protomaps styles", () => {
   });
 
   it.each(PROTOMAPS_FLAVORS)("%s is a complete style that passes the MapLibre style-spec validator", (flavor) => {
-    const style = buildBasemapStyle({ archiveUrl: ARCHIVE, assetsBase: ASSETS, flavor, lang: "en", attribution: DEFAULT_ATTRIBUTION });
-    expect(style.sources.protomaps).toEqual({ type: "vector", url: "pmtiles://" + ARCHIVE, attribution: DEFAULT_ATTRIBUTION });
+    const style = buildBasemapStyle({ archiveUrl: ARCHIVE, assetsBase: ASSETS, flavor, lang: "en" });
+    expect(style.sources.protomaps).toEqual({ type: "vector", url: "pmtiles://" + ARCHIVE, attribution: DEFAULT_ATTRIBUTION_HTML });
     expect(style.glyphs).toBe("https://itstiles.com/styles/fonts/{fontstack}/{range}.pbf");
     expect(style.sprite).toBe("https://itstiles.com/styles/sprites/v4/" + flavor);
     expect(style.layers.length).toBeGreaterThan(50);
@@ -107,9 +111,28 @@ describe("generated Protomaps styles", () => {
     expect(validateStyleMin(style)).toEqual([]);
   });
 
-  it("escapes custom attribution as plain text and labels in the requested language", () => {
-    const style = buildBasemapStyle({ archiveUrl: ARCHIVE, assetsBase: ASSETS, flavor: "dark", lang: "de", attribution: "A <b>&</b> B" });
-    expect(style.sources.protomaps).toMatchObject({ attribution: "A &lt;b&gt;&amp;&lt;/b&gt; B" });
+  it("always links itstiles.com, Protomaps and OpenStreetMap", () => {
+    expect(DEFAULT_ATTRIBUTION_HTML).toBe('<a href="https://itstiles.com" target="_blank" rel="noopener">itstiles.com</a> · '
+      + '<a href="https://protomaps.com" target="_blank" rel="noopener">Protomaps</a> © '
+      + '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>');
+  });
+
+  it.each([
+    [{ text: "x", href: "javascript:alert(1)" }],
+    [{ text: "x", href: "http://itstiles.com" }],
+    [{ text: "x", href: "https://evil.example" }],
+    [{ text: "x", href: "not a url" }],
+  ])("refuses attribution links outside the allowlist %#", (link) => {
+    expect(() => renderAttribution([link])).toThrow(StyleBuildError);
+  });
+
+  it("escapes link text and extra plain-text credit, so no input injects markup", () => {
+    expect(renderAttribution([{ text: "<img src=x onerror=alert(1)>", href: "https://itstiles.com" }, ' "<b>"']))
+      .toBe('<a href="https://itstiles.com" target="_blank" rel="noopener">&lt;img src=x onerror=alert(1)&gt;</a> &quot;&lt;b&gt;&quot;');
+    const style = buildBasemapStyle({ archiveUrl: ARCHIVE, assetsBase: ASSETS, flavor: "dark", lang: "de", extraAttribution: "A <script>&</script> B" });
+    expect(style.sources.protomaps).toMatchObject({ attribution: DEFAULT_ATTRIBUTION_HTML + " · A &lt;script&gt;&amp;&lt;/script&gt; B" });
+    expect(styleProblems({ ...style, sources: { protomaps: { type: "vector", url: "pmtiles://" + ARCHIVE, attribution: "Protomaps" } } }))
+      .toContain("source protomaps attribution must start with the itstiles.com backlink");
     expect(JSON.stringify(style.layers)).toContain("name:de");
   });
 
