@@ -23,7 +23,10 @@ Pick one option:
 ## 1. What is served
 
 Everything below is public, read-only and allows cross-origin reads
-(`Access-Control-Allow-Origin: *`, no credentials).
+(`Access-Control-Allow-Origin: *`, no credentials). "Short, revalidated"
+means a few minutes at the origin; a CDN in front of itstiles.com may
+currently let browsers keep `/assets/` files somewhat longer, so after a
+deploy allow for a delay or hard-reload. Do not depend on an exact duration.
 
 | URL | What it is | Caching |
 | --- | --- | --- |
@@ -32,12 +35,12 @@ Everything below is public, read-only and allows cross-origin reads
 | `https://itstiles.com/maps/white.json` | Manifest, **white** flavor | `no-cache` |
 | `https://itstiles.com/maps/grayscale.json` | Manifest, **grayscale** flavor | `no-cache` |
 | `https://itstiles.com/maps/black.json` | Manifest, **black** flavor | `no-cache` |
-| `https://itstiles.com/styles/protomaps/<flavor>.json` | Complete MapLibre style per flavor (`light`, `dark`, `white`, `grayscale`, `black`), English labels | 5 minutes |
-| `https://itstiles.com/styles/fonts/{fontstack}/{range}.pbf` | Glyphs (Noto Sans Regular / Medium / Italic) | 5 minutes |
-| `https://itstiles.com/styles/sprites/v4/<flavor>` | Sprite sheets (`.json`, `.png`, `@2x.json`, `@2x.png`) | 5 minutes |
+| `https://itstiles.com/styles/protomaps/<flavor>.json` | Complete MapLibre style per flavor (`light`, `dark`, `white`, `grayscale`, `black`), English labels | Short, revalidated |
+| `https://itstiles.com/styles/fonts/{fontstack}/{range}.pbf` | Glyphs (Noto Sans Regular / Medium / Italic) | Short, revalidated |
+| `https://itstiles.com/styles/sprites/v4/<flavor>` | Sprite sheets (`.json`, `.png`, `@2x.json`, `@2x.png`) | Short, revalidated |
 | `https://itstiles.com/archives/<sha256>.pmtiles` | The planet archive (~139 GB, read with Range requests only) | 1 year, `immutable` |
-| `https://itstiles.com/assets/embed.js` | ES module exporting `createMapViewer` (bundles MapLibre + PMTiles, ~1 MB) | 5 minutes |
-| `https://itstiles.com/assets/maplibre-gl.css` | MapLibre's stylesheet, same version as `embed.js` | 5 minutes |
+| `https://itstiles.com/assets/embed.js` | ES module exporting `createMapViewer` (bundles MapLibre + PMTiles, ~1 MB) | Short, revalidated |
+| `https://itstiles.com/assets/maplibre-gl.css` | MapLibre's stylesheet, same version as `embed.js` | Short, revalidated |
 | `https://itstiles.com/?embed=1&manifest=./maps/<flavor>.json` | Ready-made iframe viewer | `no-cache` |
 
 All five manifests point at the **same** archive; they differ only in their
@@ -125,33 +128,42 @@ reports clear status messages.
 <script type="module">
   import { createMapViewer } from "https://itstiles.com/assets/embed.js";
 
-  const viewer = await createMapViewer({
-    container: "map",                                   // element or element id
-    manifestUrl: "https://itstiles.com/maps/light.json", // pick a flavor
-    center: [13.405, 52.52],                            // [longitude, latitude]
-    zoom: 11,                                           // 0–24
-    cooperativeGestures: true,                          // recommended inside scrolling pages
-    onStatus: (status) => {
-      // status.state: "loading" | "ready" | "empty" | "unverified" | "error"
-      document.getElementById("map-status").textContent = status.message;
-    },
-  });
-
-  // viewer.map is the MapLibre map. Add your own data after the style loads:
-  viewer.map.on("load", () => {
-    viewer.map.addSource("shops", {
-      type: "geojson",
-      data: { type: "FeatureCollection", features: [
-        { type: "Feature", geometry: { type: "Point", coordinates: [13.405, 52.52] }, properties: { name: "Mitte" } },
-      ] },
+  const statusLine = document.getElementById("map-status");
+  try {
+    const viewer = await createMapViewer({
+      container: "map",                                   // element or element id
+      manifestUrl: "https://itstiles.com/maps/light.json", // pick a flavor
+      center: [13.405, 52.52],                            // [longitude, latitude]
+      zoom: 11,                                           // 0–24
+      cooperativeGestures: true,                          // recommended inside scrolling pages
+      onStatus: (status) => {
+        // status.state: "loading" | "ready" | "empty" | "unverified" | "error"
+        statusLine.textContent = status.message;
+        statusLine.dataset.state = status.state;
+      },
     });
-    viewer.map.addLayer(
-      { id: "shops", type: "circle", source: "shops", paint: { "circle-radius": 7, "circle-color": "#d6336c", "circle-stroke-color": "#fff", "circle-stroke-width": 2 } },
-      "address_label", // insert below the basemap labels
-    );
-  });
 
-  // viewer.resetView() returns to center/zoom; viewer.destroy() removes the map.
+    // viewer.map is the MapLibre map. Add your own data after the style loads:
+    viewer.map.on("load", () => {
+      viewer.map.addSource("shops", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [
+          { type: "Feature", geometry: { type: "Point", coordinates: [13.405, 52.52] }, properties: { name: "Mitte" } },
+        ] },
+      });
+      viewer.map.addLayer(
+        { id: "shops", type: "circle", source: "shops", paint: { "circle-radius": 7, "circle-color": "#d6336c", "circle-stroke-color": "#fff", "circle-stroke-width": 2 } },
+        "address_label", // insert below the basemap labels
+      );
+    });
+
+    // viewer.resetView() returns to center/zoom; viewer.destroy() removes the map.
+  } catch (error) {
+    // A missing, non-JSON or invalid manifest (or a bad center/zoom) rejects here.
+    // onStatus has already received { state: "error", message } with the same text,
+    // and the message is also shown inside the map container.
+    statusLine.textContent = error.message;
+  }
 </script>
 ```
 
@@ -166,14 +178,19 @@ reports clear status messages.
 | `zoom` | `number` | Initial zoom 0–24 |
 | `cooperativeGestures` | `boolean` | Default `false` |
 | `signal` | `AbortSignal` | Aborting destroys the map |
-| `onStatus` | `(status) => void` | `ready` means features are actually drawn |
+| `onStatus` | `(status) => void` | `ready` means features are actually drawn; every failure, including a missing or invalid manifest, ends in `error` with a readable message |
+| `showErrors` | `boolean` | Default `true`: error messages are also shown inside the map container (`.tstiles-error`, `role="alert"`) |
 
 It resolves to `{ map, manifest, manifestUrl, archiveUrl, styleUrl, resetView, destroy }`
-and rejects with a readable error for a bad manifest or a bad `center`/`zoom`.
+and rejects with a readable error for a missing, non-JSON or invalid manifest or
+a bad `center`/`zoom`. Before rejecting it calls `onStatus({ state: "error", message })`
+with the same message and shows it in the container, so a page that forgets
+the `try`/`catch` still shows what went wrong. Failed tile, style or archive
+requests later report `error` the same way (with the failing source URL).
 Rotation is disabled; zoom buttons and a metric scale bar are added.
 
-Caveats: `embed.js` is not versioned (it can change on deploy, cached for
-5 minutes) and carries its own MapLibre copy. Do not mix `viewer.map` with a
+Caveats: `embed.js` is not versioned (it can change on deploy; browsers keep
+it for a short, revalidated period) and carries its own MapLibre copy. Do not mix `viewer.map` with a
 separately installed `maplibre-gl`. Apps with a bundler should use Option C.
 CSP: `script-src https://itstiles.com`, `style-src https://itstiles.com`, plus
 the [map CSP](#content-security-policy).

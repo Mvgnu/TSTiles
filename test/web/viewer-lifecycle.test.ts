@@ -21,6 +21,7 @@ const renderer = vi.hoisted(() => {
     public remove(): void { this.removed = true; }
     public idle(): void { this.listeners.get("idle")?.(); }
     public fail(): void { this.listeners.get("error")?.({ error: new Error("Tile fetch failed") }); }
+    public failSource(sourceId: string): void { this.listeners.get("error")?.({ error: new Error("Bad response code: 404"), sourceId }); }
   }
   return { MapStub };
 });
@@ -186,5 +187,123 @@ describe("per-instance initial view and served basemap styles", () => {
   ])("rejects an invalid initial view before fetching %#", async (view) => {
     await expect(createMapViewer({ container: "map", manifestUrl: "https://itstiles.com/maps/light.json", ...view })).rejects.toThrow(RangeError);
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+/** Minimal DOM stand-ins: the suite runs in Node without a DOM library. */
+class FakeElement {
+  public readonly children: FakeElement[] = [];
+  public className = "";
+  public textContent = "";
+  public readonly attributes = new Map<string, string>();
+  public readonly style = { cssText: "" };
+  public parent: FakeElement | undefined;
+  public setAttribute(name: string, value: string): void { this.attributes.set(name, value); }
+  public append(child: FakeElement): void { child.parent = this; this.children.push(child); }
+  public querySelector(selector: string): FakeElement | null {
+    const className = selector.replace(":scope > .", "");
+    return this.children.find((child) => child.className === className) ?? null;
+  }
+  public remove(): void {
+    if (!this.parent) return;
+    this.parent.children.splice(this.parent.children.indexOf(this), 1);
+    this.parent = undefined;
+  }
+}
+
+describe("manifest-phase failures reach onStatus and the page", () => {
+  let container: FakeElement;
+  beforeEach(() => {
+    renderer.MapStub.instances = [];
+    container = new FakeElement();
+    vi.stubGlobal("document", {
+      baseURI: "https://another-site.example/",
+      createElement: () => new FakeElement(),
+      getElementById: (id: string) => (id === "map" ? container : null),
+    });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const respond = (body: string, status = 200) => vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { status })));
+
+  it.each([
+    ["a 404 manifest", () => respond("Not found", 404), /HTTP 404/u],
+    ["a non-JSON manifest", () => respond("<!doctype html><title>Oops</title>"), /not valid JSON/u],
+    ["an invalid manifest", () => respond(JSON.stringify({ ...manifest, sha256: undefined })), /sha256/u],
+    ["an unreachable host", () => vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("Failed to fetch"); })), /could not be fetched/u],
+  ])("%s: rejects, emits error with the same message, and shows it in the container", async (_label, setup, pattern) => {
+    setup();
+    const history: ViewerStatus[] = [];
+    const failure = await createMapViewer({
+      container: "map", manifestUrl: "https://itstiles.com/maps/missing.json", onStatus: (status) => history.push(status),
+    }).then(() => undefined, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    const message = failure instanceof Error ? failure.message : "";
+    expect(message).toMatch(pattern);
+    expect(history.map((status) => status.state)).toEqual(["loading", "error"]);
+    expect(history.at(-1)?.message).toBe(message);
+    expect(container.children).toHaveLength(1);
+    expect(container.children[0]).toMatchObject({ className: "tstiles-error", textContent: message });
+    expect(container.children[0]?.attributes.get("role")).toBe("alert");
+    expect(renderer.MapStub.instances).toHaveLength(0);
+  });
+
+  it("reports an invalid initial view the same way, and honours showErrors: false", async () => {
+    const history: ViewerStatus[] = [];
+    await expect(createMapViewer({ container: "map", manifestUrl: "x", zoom: 99, showErrors: false, onStatus: (s) => history.push(s) }))
+      .rejects.toThrow(RangeError);
+    expect(history).toEqual([{ state: "error", message: "zoom must be a number from 0 to 24." }]);
+    expect(container.children).toHaveLength(0);
+  });
+
+  it("does not report a caller abort as an error", async () => {
+    const controller = new AbortController();
+    vi.stubGlobal("fetch", vi.fn(async () => { controller.abort(); throw new DOMException("aborted", "AbortError"); }));
+    const history: ViewerStatus[] = [];
+    await expect(createMapViewer({ container: "map", manifestUrl: "https://itstiles.com/maps/light.json", signal: controller.signal, onStatus: (s) => history.push(s) }))
+      .rejects.toThrow();
+    expect(history.map((status) => status.state)).toEqual(["loading"]);
+    expect(container.children).toHaveLength(0);
+  });
+
+  it("clears a previous error once a manifest loads, and names the failing archive URL later", async () => {
+    respond("Not found", 404);
+    await createMapViewer({ container: "map", manifestUrl: "https://maps.example/maps/fixture.json" }).catch(() => undefined);
+    expect(container.children).toHaveLength(1);
+    respond(JSON.stringify(manifest));
+    const history: ViewerStatus[] = [];
+    const viewer = await createMapViewer({ container: "map", manifestUrl: "https://maps.example/maps/fixture.json", onStatus: (s) => history.push(s) });
+    expect(container.children).toHaveLength(0);
+    const map = renderer.MapStub.instances.at(-1);
+    if (!map) throw new Error("Viewer did not construct a map.");
+    map.style = vectorStyle;
+    map.failSource("archive");
+    expect(history.at(-1)?.state).toBe("error");
+    expect(history.at(-1)?.message).toContain("Bad response code: 404 (https://maps.example/archives/fixture.pmtiles)");
+    expect(container.children[0]?.textContent).toBe(history.at(-1)?.message);
+    viewer.destroy();
+    expect(container.children).toHaveLength(0);
+  });
+});
+
+describe("status hints follow the gesture mode", () => {
+  beforeEach(() => {
+    renderer.MapStub.instances = [];
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(manifest))));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each([
+    [false, "Drag to pan"],
+    [true, "Ctrl/⌘ + scroll"],
+  ])("cooperativeGestures %s", async (cooperativeGestures, hint) => {
+    const history: ViewerStatus[] = [];
+    await createMapViewer({ container: "map", manifestUrl: "https://maps.example/maps/fixture.json", baseUrl: "https://a.example/", cooperativeGestures, onStatus: (s) => history.push(s) });
+    const map = renderer.MapStub.instances.at(-1);
+    if (!map) throw new Error("Viewer did not construct a map.");
+    map.style = vectorStyle;
+    map.features = [{ source: "archive" }];
+    map.idle();
+    expect(history.at(-1)?.message).toContain(hint);
   });
 });

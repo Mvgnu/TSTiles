@@ -16,6 +16,7 @@ const note = element("preview-note", HTMLParagraphElement);
 const manifestInput = element("manifest-url", HTMLInputElement);
 const snippet = element("embed-code", HTMLElement);
 const copyButton = element("copy-embed", HTMLButtonElement);
+const retryButton = element("retry-map", HTMLButtonElement);
 const parameters = new URLSearchParams(location.search);
 const isEmbedded = parameters.get("embed") === "1";
 document.documentElement.dataset.embed = String(isEmbedded);
@@ -31,6 +32,7 @@ function setStatus(status: ViewerStatus): void {
     mapElement.dataset.visibleFeatures = String(status.visibleFeatures);
   }
   badge.dataset.state = status.state;
+  retryButton.hidden = status.state !== "error";
   badge.textContent = { loading: "Loading", ready: "Map loaded", empty: "Empty view", unverified: "Style only", error: "Needs attention" }[status.state];
 }
 
@@ -57,6 +59,7 @@ async function start(): Promise<void> {
       manifestUrl: selectedManifest,
       baseUrl: document.baseURI,
       cooperativeGestures: isEmbedded,
+      showErrors: false, // this page shows status in its own feedback bar
       signal: currentController.signal,
       onStatus: setStatus,
     });
@@ -113,7 +116,7 @@ element("manifest-form", HTMLFormElement).addEventListener("submit", (event) => 
   }
 });
 element("reset-view", HTMLButtonElement).addEventListener("click", () => viewer?.resetView());
-element("retry-map", HTMLButtonElement).addEventListener("click", () => { void start(); });
+retryButton.addEventListener("click", () => { void start(); });
 copyButton.addEventListener("click", () => {
   if (!navigator.clipboard) {
     copyButton.textContent = "Select the snippet to copy";
