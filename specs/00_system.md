@@ -126,3 +126,19 @@ Follow-up ruling (same day): `@protomaps/basemaps` is an approved web-domain
 import. `node:` imports in the web domain are allowed only in the operator CLI
 files `src/web/styles-build.ts` and `src/web/styles-cli.ts`; browser bundles
 must never import them. The style-spec validator stays a test-time check.
+
+## Ruling 2026-10-29 (later): public landing page, legal pages, backlink
+
+itstiles.com is a free public service. `/` becomes a German landing page
+("Map Tiles kostenlos, in Deutschland gehostet"); the map viewer moves to
+`/viewer` (same query parameters, including `embed=1`). Legal pages
+`/impressum`, `/datenschutz`, `/nutzungsbedingungen` are static HTML from
+`public/` (web domain); the hosting domain adds their routes with the same
+header policy as `/`. The only condition of use is a visible backlink: every
+served style's attribution names and links `itstiles.com` alongside
+Protomaps and OpenStreetMap. Manifest `attribution` stays plain text (frozen
+contract); the link lives in the served styles and the embed viewer. The
+operator identity is the owner's (Magnus Ohle, Tübingen), as on the owner's
+other sites. No cookies, analytics, or third-party requests on these pages.
+The web domain also owns `docs/styleguide.md`, a guide to distinctive per-site
+map styling.

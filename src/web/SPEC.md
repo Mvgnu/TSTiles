@@ -6,6 +6,7 @@ paths:
     - src/web/
     - public/
     - docs/integration.md
+    - docs/styleguide.md
   tests:
     - test/web/
 exports:
