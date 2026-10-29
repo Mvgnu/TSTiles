@@ -7,11 +7,61 @@ const help = `TSTiles archive preparation
   inspect <file.pmtiles>
   publish <file.pmtiles> --out <directory> --id <slug> --name <text>
           [--attribution <plain-text credit>] [--style <ready-to-serve URL>]
+          [--link]
 
 Publication uses archive metadata attribution when --attribution is omitted.
 Input must already be vector PMTiles v3. No OSM conversion is performed.
 Inspection covers the header and metadata, not every directory or tile.
+
+By default publish copies the archive (needs free space for a second copy).
+--link copies no bytes: it hashes the source in place and hard-links it to
+<out>/archives/<sha256>.pmtiles, then writes the manifest last. The source
+must be an ordinary file (not a symlink) on the same filesystem as --out;
+otherwise publication fails (it never falls back to copying). Afterwards
+both names share one inode: remove the original name or never modify it,
+because writing to either name changes the published, immutable archive.
 `;
+
+const valueFlags = ["--out", "--id", "--name", "--attribution", "--style"] as const;
+const booleanFlags = ["--link"] as const;
+type PublishFlag = typeof valueFlags[number] | typeof booleanFlags[number];
+const flagError = "Publish options must be unique --out, --id, --name, --attribution or --style flags each followed by a value, or a valueless --link.";
+
+function isValueFlag(key: string): key is typeof valueFlags[number] {
+  return (valueFlags as readonly string[]).includes(key);
+}
+
+function isBooleanFlag(key: string): key is typeof booleanFlags[number] {
+  return (booleanFlags as readonly string[]).includes(key);
+}
+
+function parsePublishFlags(args: readonly string[]): Map<PublishFlag, string | true> {
+  const flags = new Map<PublishFlag, string | true>();
+  let index = 0;
+  while (index < args.length) {
+    const key = args[index];
+    if (key === undefined) throw new ArchiveError("INVALID_OPTIONS", flagError);
+    if (isBooleanFlag(key)) {
+      // A following non-flag token is not a value for --link; it is rejected as an unknown flag next.
+      if (flags.has(key)) throw new ArchiveError("INVALID_OPTIONS", flagError);
+      flags.set(key, true);
+      index += 1;
+      continue;
+    }
+    const value = args[index + 1];
+    if (!isValueFlag(key) || flags.has(key) || value === undefined || value.startsWith("--")) {
+      throw new ArchiveError("INVALID_OPTIONS", flagError);
+    }
+    flags.set(key, value);
+    index += 2;
+  }
+  return flags;
+}
+
+function stringFlag(flags: Map<PublishFlag, string | true>, key: PublishFlag): string | undefined {
+  const value = flags.get(key);
+  return typeof value === "string" ? value : undefined;
+}
 
 export async function runCli(args: readonly string[], signal?: AbortSignal): Promise<string> {
   if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) return help;
@@ -24,26 +74,18 @@ export async function runCli(args: readonly string[], signal?: AbortSignal): Pro
     if (args.length !== 2) throw new ArchiveError("INVALID_OPTIONS", "inspect accepts exactly one local archive path.");
     return JSON.stringify(await inspectArchive(file, { signal }), null, 2);
   }
-  const flags = new Map<string, string>();
-  const allowed = new Set(["--out", "--id", "--name", "--attribution", "--style"]);
-  for (let index = 2; index < args.length; index += 2) {
-    const key = args[index];
-    const value = args[index + 1];
-    if (key === undefined || !allowed.has(key) || value === undefined || value.startsWith("--") || flags.has(key)) {
-      throw new ArchiveError("INVALID_OPTIONS", "Publish options must be unique --out, --id, --name, --attribution or --style flags, each followed by a value.");
-    }
-    flags.set(key, value);
-  }
-  const outDir = flags.get("--out");
-  const id = flags.get("--id");
-  const name = flags.get("--name");
+  const flags = parsePublishFlags(args.slice(2));
+  const outDir = stringFlag(flags, "--out");
+  const id = stringFlag(flags, "--id");
+  const name = stringFlag(flags, "--name");
   if (outDir === undefined || id === undefined || name === undefined) {
     throw new ArchiveError("INVALID_OPTIONS", "publish requires --out, --id and --name.");
   }
   return JSON.stringify(await publishArchive(file, {
     outDir, id, name,
-    attribution: flags.get("--attribution"),
-    style: flags.get("--style"),
+    attribution: stringFlag(flags, "--attribution"),
+    style: stringFlag(flags, "--style"),
+    mode: flags.has("--link") ? "link" : "copy",
     signal,
   }), null, 2);
 }

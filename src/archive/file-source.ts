@@ -31,9 +31,19 @@ export function inspectionLimits(options: InspectionOptions = {}): InspectionLim
   return { maxReadBytes, maxDecodedBytes };
 }
 
-function sameFile(left: BigIntStats, right: BigIntStats): boolean {
+function sameContent(left: BigIntStats, right: BigIntStats): boolean {
   return left.dev === right.dev && left.ino === right.ino && left.size === right.size
-    && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
+    && left.mtimeNs === right.mtimeNs;
+}
+
+function sameFile(left: BigIntStats, right: BigIntStats): boolean {
+  return sameContent(left, right) && left.ctimeNs === right.ctimeNs;
+}
+
+/** Device and inode of the opened file, used to prove a hard link names it. */
+export interface FileIdentity {
+  readonly dev: bigint;
+  readonly ino: bigint;
 }
 
 /** A stable open file, bounded positional reads, and HTTP-like EOF clipping. */
@@ -76,13 +86,31 @@ export class BoundedFileSource implements Source {
     return `${this.filePath}:${this.etag}`;
   }
 
+  public get identity(): FileIdentity {
+    return { dev: this.initial.dev, ino: this.initial.ino };
+  }
+
+  /** Full identity check: device, inode, size, mtime and ctime. */
   public async assertUnchanged(): Promise<void> {
+    await this.compare(sameFile);
+  }
+
+  /**
+   * Device, inode, size and mtime only. Creating a hard link legitimately
+   * changes the inode's ctime (link count), so link publication uses this
+   * after its own link() call; every read still uses the full check.
+   */
+  public async assertContentUnchanged(): Promise<void> {
+    await this.compare(sameContent);
+  }
+
+  private async compare(same: (left: BigIntStats, right: BigIntStats) => boolean): Promise<void> {
     checkAbort(this.signal);
     if (this.closed) throw new ArchiveError("IO_ERROR", "Archive source is closed.");
     try {
       const current = await this.handle.stat({ bigint: true });
       const atPath = await stat(this.filePath, { bigint: true });
-      if (!sameFile(this.initial, current) || !sameFile(this.initial, atPath)) {
+      if (!same(this.initial, current) || !same(this.initial, atPath)) {
         throw new ArchiveError("INPUT_CHANGED", "Input changed while being read; retry with an immutable source file.");
       }
     } catch (error) {

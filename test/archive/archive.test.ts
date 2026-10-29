@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { appendFile, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -8,6 +8,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { inspectArchive, publishArchive } from "../../src/archive/index.js";
 import { BoundedFileSource } from "../../src/archive/file-source.js";
 import { runCli } from "../../src/archive/cli.js";
+import { linkFailure } from "../../src/archive/publish.js";
 
 const fixture = resolve("test/fixtures/one-tile.pmtiles");
 const temporary: string[] = [];
@@ -243,7 +244,158 @@ describe("immutable publication", () => {
   });
 });
 
+/** A private copy of the fixture: the checked-in file is never hard-linked. */
+async function linkableFixture(): Promise<string> {
+  const path = join(await workspace(), "planet.pmtiles");
+  await copyFile(fixture, path);
+  return path;
+}
+
+describe("hard-link publication", () => {
+  test("publishes without copying: same manifest as copy mode, one shared inode, no temp files", async () => {
+    const source = await linkableFixture();
+    const copyOut = await workspace();
+    const linkOut = await workspace();
+    const copied = await publishArchive(source, options(copyOut));
+    const linked = await publishArchive(source, { ...options(linkOut), mode: "link" });
+    expect(copied.mode).toBe("copy");
+    expect(linked.mode).toBe("link");
+    expect(linked.manifest).toEqual(copied.manifest);
+    expect(await readFile(join(linkOut, "maps", "fixture.json"), "utf8")).toBe(await readFile(join(copyOut, "maps", "fixture.json"), "utf8"));
+    expect(linked.reusedArchive).toBe(false);
+    const [sourceStat, archiveStat] = await Promise.all([stat(source), stat(linked.archivePath)]);
+    expect(archiveStat.ino).toBe(sourceStat.ino);
+    expect(archiveStat.dev).toBe(sourceStat.dev);
+    expect(archiveStat.nlink).toBe(2);
+    expect((await stat(copied.archivePath)).ino).not.toBe(sourceStat.ino);
+    expect(await readdir(join(linkOut, "archives"))).toEqual([`${linked.manifest.sha256}.pmtiles`]);
+    expect(await readdir(join(linkOut, "maps"))).toEqual(["fixture.json"]);
+    expect(linked.notes.join(" ")).toContain("one inode");
+    expect(copied.notes).toEqual([]);
+  });
+
+  test("re-publishing the same source reuses the link; a copied archive with the same digest is verified and reused", async () => {
+    const source = await linkableFixture();
+    const outDir = await workspace();
+    const first = await publishArchive(source, { ...options(outDir), mode: "link" });
+    const second = await publishArchive(source, { ...options(outDir), id: "second", name: "Second site", mode: "link" });
+    expect(second.reusedArchive).toBe(true);
+    expect(second.archivePath).toBe(first.archivePath);
+    expect((await stat(source)).nlink).toBe(2);
+    // Publishing from the digest name itself is also an identity reuse.
+    const third = await publishArchive(first.archivePath, { ...options(outDir), id: "third", name: "Third", mode: "link" });
+    expect(third.reusedArchive).toBe(true);
+    expect((await stat(source)).nlink).toBe(2);
+    expect(await readdir(join(outDir, "maps"))).toEqual(["fixture.json", "second.json", "third.json"]);
+
+    const other = await linkableFixture();
+    const copyOut = await workspace();
+    await publishArchive(fixture, options(copyOut));
+    const reused = await publishArchive(other, { ...options(copyOut), mode: "link" });
+    expect(reused.reusedArchive).toBe(true);
+    expect(reused.notes).toEqual([]);
+    expect((await stat(other)).nlink).toBe(1);
+  });
+
+  test("a different-bytes archive under the digest name is rejected without linking", async () => {
+    const source = await linkableFixture();
+    const outDir = await workspace();
+    const first = await publishArchive(fixture, options(outDir));
+    const previous = await readFile(first.manifestPath);
+    const corrupt = await readFile(first.archivePath);
+    corrupt[200] = (corrupt[200] ?? 0) ^ 255;
+    await writeFile(first.archivePath, corrupt);
+    await expect(publishArchive(source, { ...options(outDir), name: "Must not replace", mode: "link" }))
+      .rejects.toMatchObject({ code: "DESTINATION_CORRUPT" });
+    expect(await readFile(first.manifestPath)).toEqual(previous);
+    expect((await stat(source)).nlink).toBe(1);
+  });
+
+  test("a source modified during hashing is detected; no link and no manifest change", async () => {
+    const outDir = await workspace();
+    const first = await publishArchive(fixture, options(outDir));
+    const previous = await readFile(first.manifestPath);
+    const source = join(await workspace(), "growing.pmtiles");
+    await writeFile(source, Buffer.concat([await readFile(fixture), Buffer.alloc(3 * 1024 * 1024)]));
+    const originalRead = BoundedFileSource.prototype.getBytes;
+    vi.spyOn(BoundedFileSource.prototype, "getBytes").mockImplementation(async function (
+      this: BoundedFileSource, offset, length, signal, etag,
+    ) {
+      const result = await originalRead.call(this, offset, length, signal, etag);
+      if (length === 1024 * 1024 && offset === 0) await appendFile(source, "changed");
+      return result;
+    });
+    await expect(publishArchive(source, { ...options(outDir), name: "Must not replace", mode: "link" }))
+      .rejects.toMatchObject({ code: "INPUT_CHANGED" });
+    expect(await readFile(first.manifestPath)).toEqual(previous);
+    expect(await readdir(join(outDir, "archives"))).toEqual([`${first.manifest.sha256}.pmtiles`]);
+    expect((await stat(source)).nlink).toBe(1);
+  });
+
+  test("interrupting link hashing leaves no link and no manifest", async () => {
+    const outDir = await workspace();
+    const source = join(await workspace(), "large.pmtiles");
+    await writeFile(source, Buffer.concat([await readFile(fixture), Buffer.alloc(3 * 1024 * 1024)]));
+    const controller = new AbortController();
+    const originalRead = BoundedFileSource.prototype.getBytes;
+    vi.spyOn(BoundedFileSource.prototype, "getBytes").mockImplementation(async function (
+      this: BoundedFileSource, offset, length, signal, etag,
+    ) {
+      const result = await originalRead.call(this, offset, length, signal, etag);
+      if (length === 1024 * 1024) controller.abort();
+      return result;
+    });
+    await expect(publishArchive(source, { ...options(outDir), mode: "link", signal: controller.signal }))
+      .rejects.toMatchObject({ code: "ABORTED" });
+    expect(await readdir(join(outDir, "archives"))).toEqual([]);
+    expect(await readdir(join(outDir, "maps"))).toEqual([]);
+    expect((await stat(source)).nlink).toBe(1);
+  });
+
+  test("rejects a symbolic-link source and unknown modes", async () => {
+    const real = await linkableFixture();
+    const alias = join(await workspace(), "alias.pmtiles");
+    await symlink(real, alias);
+    const outDir = await workspace();
+    await expect(publishArchive(alias, { ...options(outDir), mode: "link" })).rejects.toMatchObject({ code: "INVALID_OPTIONS" });
+    expect((await stat(real)).nlink).toBe(1);
+    expect(await readdir(outDir)).toEqual([]);
+    // @ts-expect-error runtime validation of an untyped caller's mode
+    await expect(publishArchive(real, { ...options(outDir), mode: "move" })).rejects.toMatchObject({ code: "INVALID_OPTIONS" });
+  });
+
+  test("maps EXDEV and filesystems without hard links to actionable errors (error-mapping unit test)", () => {
+    const exdev = linkFailure(Object.assign(new Error("cross-device link"), { code: "EXDEV" }), "/data/planet.pmtiles", "/srv/site/archives");
+    expect(exdev).toMatchObject({ code: "CROSS_FILESYSTEM" });
+    expect(exdev.message).toContain("same filesystem");
+    expect(exdev.message).toContain("/data/planet.pmtiles");
+    for (const code of ["EPERM", "ENOTSUP", "EOPNOTSUPP", "EMLINK"]) {
+      expect(linkFailure(Object.assign(new Error(code), { code }), "/a", "/b")).toMatchObject({ code: "LINK_UNSUPPORTED" });
+    }
+    expect(linkFailure(Object.assign(new Error("disk"), { code: "EIO" }), "/a", "/b")).toMatchObject({ code: "IO_ERROR" });
+  });
+});
+
 describe("CLI boundary", () => {
+  test("publish --link emits the mode and shares the source inode", async () => {
+    const source = await linkableFixture();
+    const outDir = await workspace();
+    const result = JSON.parse(await runCli(["publish", source, "--out", outDir, "--id", "cli", "--link", "--name", "CLI example", "--attribution", "Fixture"]));
+    expect(result.mode).toBe("link");
+    expect(result.manifest.id).toBe("cli");
+    expect((await stat(result.archivePath)).ino).toBe((await stat(source)).ino);
+    const copied = JSON.parse(await runCli(["publish", source, "--out", await workspace(), "--id", "cli", "--name", "CLI example", "--attribution", "Fixture"]));
+    expect(copied.mode).toBe("copy");
+    expect(await runCli(["--help"])).toContain("--link");
+  });
+
+  test("--link is valueless and unique", async () => {
+    const base = ["publish", fixture, "--out", await workspace(), "--id", "cli", "--name", "CLI"];
+    for (const extra of [["--link", "yes"], ["--link", "--link"], ["--link=true"], ["--link", "true", "--attribution", "x"]]) {
+      await expect(runCli([...base, ...extra])).rejects.toMatchObject({ code: "INVALID_OPTIONS" });
+    }
+  });
+
   test("emits parseable inspection and publication results", async () => {
     expect(JSON.parse(await runCli(["inspect", fixture])).formatVersion).toBe(3);
     const outDir = await workspace();
