@@ -9,8 +9,9 @@ paths:
     - test/hosting/
 exports:
   - Caddy deployment
+  - nginx production site (itstiles.com) and route snippets (ops/nginx/)
   - hosting runbook
-  - HTTP verification
+  - HTTP verification (Caddy and nginx)
 consumes:
   - archive publication layout
   - web static build
@@ -49,9 +50,27 @@ ranges, CORS/preflight, ETag behavior, immutable archives and mutable manifests.
 An explicitly requested hosting test fails when Caddy is unavailable; it must
 not turn missing infrastructure into a green skipped gate.
 
+Production (ruling 2026-10-29) is the shared VPS's nginx serving
+`/mnt/tstiles/site` for `itstiles.com`. `ops/nginx/` holds the site file, a
+bootstrap site for certificate issuance, the route snippet that reproduces the
+`ops/public.caddy` table, its http-context maps, and the Cloudflare real-IP
+snippet. `test/hosting/nginx.test.mjs` runs real nginx (`NGINX_BIN`) against the
+route snippet unmodified, and validates/runs path-rewritten copies of the site
+and bootstrap files with a throwaway certificate; it fails when nginx is missing.
+
 ## Known gaps
 
 Local HTTP evidence cannot prove a production TLS/domain configuration, real
 traffic capacity, live S3 semantics, or the owner's actual storage bill.
 The supplied Compose deployment also needs an actual container-runtime check;
 the current verification environment has no Docker binary.
+
+nginx-specific gaps: the brotli directives in `itstiles.com.conf` are removed
+for the local run (stock nginx has no brotli module), so only `nginx -t` on the
+host proves them. Local nginx is 1.31 on macOS (case-insensitive location
+matching; the case-variant path check runs only on Linux); production is 1.28.
+An unsatisfiable range (416) carries the archive's immutable Cache-Control from
+nginx's first header pass plus `no-store` (no-store governs), and a 206 carries
+no `Accept-Ranges`; both differ from Caddy byte-for-byte. The real certificate,
+DNS, Cloudflare proxying, HTTP/2 and the live 139 GB archive are proved only by
+the PM's checks against https://itstiles.com.
