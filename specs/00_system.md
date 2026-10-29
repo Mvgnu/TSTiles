@@ -130,8 +130,9 @@ must never import them. The style-spec validator stays a test-time check.
 ## Ruling 2026-10-29 (later): public landing page, legal pages, backlink
 
 itstiles.com is a free public service. `/` becomes a German landing page
-("Map Tiles kostenlos, in Deutschland gehostet"); the map viewer moves to
-`/viewer` (same query parameters, including `embed=1`). Legal pages
+("Map Tiles kostenlos, in Deutschland gehostet") with a live map hero. Owner
+amendment: there is no separate viewer page and no iframe embed; sites
+integrate with `/assets/embed.js` or the npm path. Legal pages
 `/impressum`, `/datenschutz`, `/nutzungsbedingungen` are static HTML from
 `public/` (web domain); the hosting domain adds their routes with the same
 header policy as `/`. The only condition of use is a visible backlink: every
