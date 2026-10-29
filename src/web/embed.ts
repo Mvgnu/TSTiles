@@ -23,6 +23,11 @@ export interface ViewerOptions {
   /** Initial zoom (0–24) for this instance; overrides the manifest zoom. */
   readonly zoom?: number;
   readonly signal?: AbortSignal;
+  /**
+   * Show error messages inside the map container (default true), so an
+   * integration without an onStatus handler is never silently blank.
+   */
+  readonly showErrors?: boolean;
   readonly onStatus?: (status: ViewerStatus) => void;
 }
 
@@ -57,11 +62,68 @@ function checkInitialView(options: ViewerOptions): void {
   }
 }
 
+/** The failing source's URL (pmtiles:// prefix removed), when MapLibre names a source. */
+function sourceUrlOf(map: LibreMap, event: unknown): string | undefined {
+  if (typeof event !== "object" || event === null || !("sourceId" in event) || typeof event.sourceId !== "string") return undefined;
+  const source = map.getStyle()?.sources?.[event.sourceId];
+  const url = source !== undefined && "url" in source && typeof source.url === "string" ? source.url : undefined;
+  return url?.replace(/^pmtiles:\/\//u, "");
+}
+
+function containerElement(container: HTMLElement | string): HTMLElement | undefined {
+  if (typeof container !== "string") return container;
+  if (typeof document === "undefined") return undefined;
+  return document.getElementById(container) ?? undefined;
+}
+
+export const ERROR_CLASS = "tstiles-error";
+
+/** Plain-text, self-styled message box; works without any page CSS. */
+function showError(container: HTMLElement | string, message: string, overlay: boolean): void {
+  const host = containerElement(container);
+  if (!host) return;
+  let box = host.querySelector<HTMLElement>(":scope > ." + ERROR_CLASS);
+  if (!box) {
+    box = document.createElement("div");
+    box.className = ERROR_CLASS;
+    box.setAttribute("role", "alert");
+    host.append(box);
+  }
+  box.style.cssText = (overlay
+    ? "position:absolute;top:8px;left:8px;right:56px;z-index:3;"
+    : "min-height:100%;box-sizing:border-box;display:flex;align-items:center;")
+    + "padding:12px 14px;background:#fff4f2;color:#7a1c12;border:1px solid #e8b4ac;border-radius:8px;"
+    + "font:14px/1.4 system-ui,-apple-system,sans-serif;overflow-wrap:anywhere;";
+  box.textContent = message;
+}
+
+function clearError(container: HTMLElement | string): void {
+  containerElement(container)?.querySelector(":scope > ." + ERROR_CLASS)?.remove();
+}
+
+function isAbort(error: unknown, signal?: AbortSignal): boolean {
+  return signal?.aborted === true || (error instanceof DOMException && error.name === "AbortError");
+}
+
 export async function createMapViewer(options: ViewerOptions): Promise<MapViewer> {
-  checkInitialView(options);
-  options.onStatus?.({ state: "loading", message: "Loading map manifest…" });
-  const resolved = await loadManifest(options.manifestUrl, options.baseUrl ?? document.baseURI, options.signal);
-  options.signal?.throwIfAborted();
+  const showErrors = options.showErrors ?? true;
+  let resolved: ResolvedManifest;
+  try {
+    checkInitialView(options);
+    options.onStatus?.({ state: "loading", message: "Loading map manifest…" });
+    resolved = await loadManifest(options.manifestUrl, options.baseUrl ?? document.baseURI, options.signal);
+    options.signal?.throwIfAborted();
+  } catch (error) {
+    // Manifest-phase failures reach onStatus and the page with the same
+    // message the promise rejects with. Aborts are the caller's own action.
+    if (!isAbort(error, options.signal)) {
+      const message = error instanceof Error ? error.message : "Map setup failed: " + String(error);
+      options.onStatus?.({ state: "error", message });
+      if (showErrors) showError(options.container, message, false);
+    }
+    throw error;
+  }
+  clearError(options.container);
   registerProtocol();
   const { manifest, archiveUrl, styleUrl } = resolved;
   options.onStatus?.({ state: "loading", message: styleUrl === undefined ? "Reading archive tiles…" : "Loading map resources…" });
@@ -106,21 +168,23 @@ export async function createMapViewer(options: ViewerOptions): Promise<MapViewer
   map.on("error", (event) => {
     if (destroyed) return;
     failed = true;
-    const cause = event.error?.message ?? "Unknown map error";
-    options.onStatus?.({
-      state: "error",
-      message: "Map resource failed: " + cause.slice(0, 350) + " Check archive Range/CORS support and the style's source layers and asset URLs, then retry.",
-    });
+    let cause = (event.error?.message ?? "Unknown map error").slice(0, 350).replace(/\.\s*$/u, "");
+    const sourceUrl = sourceUrlOf(map, event);
+    if (sourceUrl !== undefined && !cause.includes(sourceUrl)) cause += " (" + sourceUrl + ")";
+    const message = "Map resource failed: " + cause + ". Check archive Range/CORS support and the style's source layers and asset URLs, then retry.";
+    options.onStatus?.({ state: "error", message });
+    if (showErrors) showError(options.container, message, true);
   });
+  const gestureHint = options.cooperativeGestures === true
+    ? "Use Ctrl/⌘ + scroll or + / − to zoom; two fingers to pan on touch screens."
+    : "Drag to pan; use + / − to zoom.";
   map.on("idle", () => {
     if (destroyed || failed) return;
     const visibleFeatures = map.queryRenderedFeatures().length;
     if (visibleFeatures > 0) {
       options.onStatus?.({
         state: "ready",
-        message: styleUrl === undefined
-          ? "Archive features visible. Drag to pan; use + / − to zoom."
-          : "Styled features visible. Drag to pan; use + / − to zoom.",
+        message: (styleUrl === undefined ? "Archive features visible. " : "Styled features visible. ") + gestureHint,
         visibleFeatures,
       });
       return;
@@ -161,6 +225,7 @@ export async function createMapViewer(options: ViewerOptions): Promise<MapViewer
     if (destroyed) return;
     destroyed = true;
     options.signal?.removeEventListener("abort", destroy);
+    clearError(options.container);
     map.remove();
   };
   options.signal?.addEventListener("abort", destroy, { once: true });

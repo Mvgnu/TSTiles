@@ -82,11 +82,15 @@ schema-checked. The MapLibre style-spec validator runs in the test suite only:
 `@maplibre/maplibre-gl-style-spec` is a transitive, undeclared package, so the
 CLI performs its own structural checks instead.
 
-Architecture gate: `scripts/architecture.mjs` (PM-owned) allows only
-`pmtiles`/`maplibre-gl` and no `node:` imports under `src/web/`. The style CLI
-needs `@protomaps/basemaps` and `node:fs/promises`, `node:path`, `node:util`,
-so `npm run test:architecture` fails until the PM approves those for
-`src/web/basemap.ts` and the Node-only `src/web/styles-build.ts`.
+Architecture gate: per the PM ruling, `@protomaps/basemaps` is allowed in
+`src/web/`, and `node:` imports only in `styles-build.ts`/`styles-cli.ts`.
+
+`createMapViewer` reports every failure through `onStatus({ state: "error" })`:
+manifest-phase failures (fetch, HTTP status, JSON, validation, initial view)
+emit it with the exact message the promise rejects with; map/source errors
+name the failing source URL. By default (`showErrors`) the message is also
+shown in the container as `.tstiles-error[role=alert]`; the static viewer
+turns this off and uses its own status bar. Caller aborts are not errors.
 
 `createMapViewer` accepts per-instance `center`/`zoom`; the static viewer reads
 `?center=lng,lat&zoom=z`. Browser rendering of the served Protomaps styles on

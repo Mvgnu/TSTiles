@@ -30,6 +30,7 @@ h3 { margin: 25px 0 10px; color: #405a50; font-size: 12px; font-weight: 700; }
 .map-panel { min-width: 0; overflow: hidden; background: #fff; border: 1px solid var(--line); border-radius: 14px; }
 .map-toolbar { height: 48px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
 .mode-label { color: #416358; font-size: 12px; font-weight: 650; }
+[hidden] { display: none !important; }
 .quiet-button { min-height: 34px; padding: 6px 9px; border: 1px solid transparent; border-radius: 7px; color: #286553; background: transparent; font-size: 12px; font-weight: 650; white-space: nowrap; }
 .quiet-button:hover:enabled { background: #edf4ed; border-color: #d3e3d5; }
 #map { width: 100%; height: 470px; background: #edf2ee; }
