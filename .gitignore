@@ -7,3 +7,4 @@ test-results/
 .env
 *.log
 playwright-report/
+.claude/worktrees/

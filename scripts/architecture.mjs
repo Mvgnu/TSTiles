@@ -76,10 +76,14 @@ export function scopeViolations(spec, paths) {
   return paths.filter((path) => pmOwned.some((pm) => contains(pm, path)) || !scopes.some((scope) => contains(scope, path)));
 }
 
+export const webNodeEntrypoints = ["src/web/styles-build.ts", "src/web/styles-cli.ts"];
+
 export function sourceViolations(path, text) {
   const errors = [];
   const domain = path.startsWith("src/archive/") ? "archive" : path.startsWith("src/web/") ? "web" : "contract";
-  const allowedPackages = domain === "archive" ? ["pmtiles"] : domain === "web" ? ["pmtiles", "maplibre-gl"] : [];
+  const allowedPackages = domain === "archive" ? ["pmtiles"] : domain === "web" ? ["pmtiles", "maplibre-gl", "@protomaps/basemaps"] : [];
+  // PM ruling 2026-10-29: the operator style CLI is the only Node code in the web domain.
+  const nodeAllowed = domain === "archive" || webNodeEntrypoints.includes(path);
   const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
   function inspectImport(value) {
     if (!ts.isStringLiteralLike(value)) { errors.push(`${path}: dynamic module name is outside the static contract`); return; }
@@ -88,7 +92,7 @@ export function sourceViolations(path, text) {
       const target = posix.normalize(posix.join(posix.dirname(path), name)).replace(/\.(js|mjs)$/, ".ts");
       if (target !== "src/contract.ts" && !target.startsWith(`src/${domain}/`)) errors.push(`${path}: cross-domain import ${name}`);
     } else if (name.startsWith("node:")) {
-      if (domain !== "archive") errors.push(`${path}: browser/contract imports Node ${name}`);
+      if (!nodeAllowed) errors.push(`${path}: browser/contract imports Node ${name}`);
     } else if (!allowedPackages.some((allowed) => name === allowed || name.startsWith(`${allowed}/`))) {
       errors.push(`${path}: unapproved dependency ${name}`);
     }

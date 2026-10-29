@@ -121,3 +121,8 @@ same archive. Attribution: `Protomaps © OpenStreetMap contributors`.
 The web domain also owns `docs/integration.md`: the step-by-step guide that
 another project (or an agent working in it) follows to embed and style these
 maps on the same server, using only public URLs.
+
+Follow-up ruling (same day): `@protomaps/basemaps` is an approved web-domain
+import. `node:` imports in the web domain are allowed only in the operator CLI
+files `src/web/styles-build.ts` and `src/web/styles-cli.ts`; browser bundles
+must never import them. The style-spec validator stays a test-time check.
