@@ -10,10 +10,11 @@ const renderer = vi.hoisted(() => {
     public style: StyleSpecification = { version: 8, sources: {}, layers: [] };
     public removed = false;
     public resetCount = 0;
-    public constructor(public readonly options: { style: unknown }) { MapStub.instances.push(this); }
+    public lastReset: unknown;
+    public constructor(public readonly options: { style: unknown; center?: unknown; zoom?: unknown }) { MapStub.instances.push(this); }
     public addControl(): void { /* Controls are independent of the readiness lifecycle. */ }
-    public fitBounds(): void { this.resetCount += 1; }
-    public jumpTo(): void { this.resetCount += 1; }
+    public fitBounds(bounds: unknown): void { this.resetCount += 1; this.lastReset = { fitBounds: bounds }; }
+    public jumpTo(view: unknown): void { this.resetCount += 1; this.lastReset = { jumpTo: view }; }
     public on(name: string, listener: (event?: unknown) => void): void { this.listeners.set(name, listener); }
     public queryRenderedFeatures(): unknown[] { return this.features; }
     public getStyle(): StyleSpecification { return this.style; }
@@ -135,5 +136,55 @@ describe("public viewer readiness lifecycle", () => {
     map.idle();
     expect(history.at(-1)?.state).toBe("error");
     expect(history.some((status) => status.state === "ready")).toBe(false);
+  });
+});
+
+describe("per-instance initial view and served basemap styles", () => {
+  const planet: MapManifest = {
+    ...manifest, id: "light", name: "Planet (light)", archive: "../archives/" + "c".repeat(64) + ".pmtiles",
+    sha256: "c".repeat(64), maxZoom: 15, bounds: [-180, -90, 180, 90], center: [0, 0, 0],
+    attribution: "Protomaps © OpenStreetMap contributors", style: "../styles/protomaps/light.json",
+  };
+  beforeEach(() => {
+    renderer.MapStub.instances = [];
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      const response = new Response(JSON.stringify(planet));
+      Object.defineProperty(response, "url", { value: "https://itstiles.com/maps/light.json" });
+      return response;
+    }));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("loads the manifest's served style intact, resolved against the manifest URL", async () => {
+    const viewer = await createMapViewer({ container: "map", manifestUrl: "https://itstiles.com/maps/light.json" , baseUrl: "https://shop.example/" });
+    const map = renderer.MapStub.instances.at(-1);
+    expect(map?.options.style).toBe("https://itstiles.com/styles/protomaps/light.json");
+    expect(viewer.archiveUrl).toBe("https://itstiles.com/archives/" + "c".repeat(64) + ".pmtiles");
+    expect(map?.lastReset).toHaveProperty("fitBounds");
+  });
+
+  it("uses the caller's center and zoom instead of the planet's [0, 0, 0], also on reset", async () => {
+    const viewer = await createMapViewer({
+      container: "map", manifestUrl: "https://itstiles.com/maps/light.json", baseUrl: "https://shop.example/",
+      center: [13.405, 52.52], zoom: 11,
+    });
+    const map = renderer.MapStub.instances.at(-1);
+    expect(map?.options).toMatchObject({ center: [13.405, 52.52], zoom: 11 });
+    expect(map?.lastReset).toEqual({ jumpTo: { center: [13.405, 52.52], zoom: 11 } });
+    viewer.resetView();
+    expect(map?.lastReset).toEqual({ jumpTo: { center: [13.405, 52.52], zoom: 11 } });
+    const zoomOnly = await createMapViewer({ container: "map", manifestUrl: "https://itstiles.com/maps/light.json", baseUrl: "https://shop.example/", zoom: 3 });
+    expect(renderer.MapStub.instances.at(-1)?.options).toMatchObject({ center: [0, 0], zoom: 3 });
+    zoomOnly.destroy();
+  });
+
+  it.each([
+    [{ center: [200, 0] as const }],
+    [{ center: [0, Number.NaN] as const }],
+    [{ zoom: 30 }],
+    [{ zoom: -1 }],
+  ])("rejects an invalid initial view before fetching %#", async (view) => {
+    await expect(createMapViewer({ container: "map", manifestUrl: "https://itstiles.com/maps/light.json", ...view })).rejects.toThrow(RangeError);
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
