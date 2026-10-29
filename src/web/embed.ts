@@ -15,6 +15,13 @@ export interface ViewerOptions {
   readonly manifestUrl: string;
   readonly baseUrl?: string;
   readonly cooperativeGestures?: boolean;
+  /**
+   * Initial view for this instance as [longitude, latitude]; overrides the
+   * manifest center. resetView() returns to this view instead of the bounds.
+   */
+  readonly center?: readonly [number, number];
+  /** Initial zoom (0–24) for this instance; overrides the manifest zoom. */
+  readonly zoom?: number;
   readonly signal?: AbortSignal;
   readonly onStatus?: (status: ViewerStatus) => void;
 }
@@ -35,18 +42,38 @@ function registerProtocol(): void {
   maplibregl.addProtocol("pmtiles", protocol.tile);
 }
 
+const MAX_LATITUDE = 85.05112878;
+
+function checkInitialView(options: ViewerOptions): void {
+  const inRange = (value: unknown, min: number, max: number): boolean =>
+    typeof value === "number" && Number.isFinite(value) && value >= min && value <= max;
+  if (options.center !== undefined
+      && !(Array.isArray(options.center) && options.center.length === 2
+        && inRange(options.center[0], -180, 180) && inRange(options.center[1], -90, 90))) {
+    throw new RangeError("center must be [longitude, latitude] with longitude -180…180 and latitude -90…90.");
+  }
+  if (options.zoom !== undefined && !inRange(options.zoom, 0, 24)) {
+    throw new RangeError("zoom must be a number from 0 to 24.");
+  }
+}
+
 export async function createMapViewer(options: ViewerOptions): Promise<MapViewer> {
+  checkInitialView(options);
   options.onStatus?.({ state: "loading", message: "Loading map manifest…" });
   const resolved = await loadManifest(options.manifestUrl, options.baseUrl ?? document.baseURI, options.signal);
   options.signal?.throwIfAborted();
   registerProtocol();
   const { manifest, archiveUrl, styleUrl } = resolved;
   options.onStatus?.({ state: "loading", message: styleUrl === undefined ? "Reading archive tiles…" : "Loading map resources…" });
+  const hasInitialView = options.center !== undefined || options.zoom !== undefined;
+  const [initialLng, initialLat] = options.center ?? [manifest.center[0], manifest.center[1]];
+  const initialCenter: [number, number] = [initialLng, Math.max(-MAX_LATITUDE, Math.min(MAX_LATITUDE, initialLat))];
+  const initialZoom = options.zoom ?? Math.min(manifest.center[2], 24);
   const map = new maplibregl.Map({
     container: options.container,
     style: styleUrl ?? buildPreviewStyle(manifest, archiveUrl),
-    center: [manifest.center[0], Math.max(-85.05112878, Math.min(85.05112878, manifest.center[1]))],
-    zoom: Math.min(manifest.center[2], 24),
+    center: initialCenter,
+    zoom: initialZoom,
     maxZoom: 24,
     attributionControl: { compact: false, customAttribution: styleUrl === undefined ? undefined : escapeHtml(manifest.attribution) },
     cooperativeGestures: options.cooperativeGestures ?? false,
@@ -59,15 +86,19 @@ export async function createMapViewer(options: ViewerOptions): Promise<MapViewer
   let destroyed = false;
 
   const resetView = (): void => {
+    if (hasInitialView) {
+      map.jumpTo({ center: initialCenter, zoom: initialZoom });
+      return;
+    }
     const [west, south, east, north] = manifest.bounds;
     if (west < east && south < north) {
-      map.fitBounds([[west, Math.max(-85.05112878, south)], [east, Math.min(85.05112878, north)]], {
+      map.fitBounds([[west, Math.max(-MAX_LATITUDE, south)], [east, Math.min(MAX_LATITUDE, north)]], {
         padding: 48,
         maxZoom: 22,
         duration: 0,
       });
     } else {
-      map.jumpTo({ center: [manifest.center[0], manifest.center[1]], zoom: Math.min(manifest.center[2], 24) });
+      map.jumpTo({ center: initialCenter, zoom: initialZoom });
     }
   };
   resetView();

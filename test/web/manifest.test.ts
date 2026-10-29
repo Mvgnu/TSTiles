@@ -7,7 +7,7 @@ import {
   resolveHttpUrl,
   resolveManifest,
 } from "../../src/web/manifest.js";
-import { buildEmbedUrl, buildPreviewStyle, iframeSnippet } from "../../src/web/style.js";
+import { buildEmbedUrl, buildPreviewStyle, iframeSnippet, parseEmbedView } from "../../src/web/style.js";
 
 function fixture(overrides: Partial<MapManifest> = {}): MapManifest {
   return {
@@ -142,5 +142,17 @@ describe("independent site configuration", () => {
     const snippet = iframeSnippet("https://maps.example/", "https://data.example/maps/city.json", 'City "map" <test>');
     expect(snippet).toContain('title="City &quot;map&quot; &lt;test&gt;"');
     expect(snippet).toContain("&amp;embed=1");
+  });
+});
+
+describe("embed view parameters", () => {
+  it("round-trips center/zoom through the iframe URL", () => {
+    const url = buildEmbedUrl("https://itstiles.com/?x=1", "https://itstiles.com/maps/dark.json", { center: [13.405, 52.52], zoom: 11 });
+    expect(url).toBe("https://itstiles.com/?manifest=https%3A%2F%2Fitstiles.com%2Fmaps%2Fdark.json&embed=1&center=13.405%2C52.52&zoom=11");
+    expect(parseEmbedView(new URL(url).searchParams)).toEqual({ center: [13.405, 52.52], zoom: 11 });
+    expect(parseEmbedView(new URLSearchParams(""))).toEqual({ center: undefined, zoom: undefined });
+    expect(() => parseEmbedView(new URLSearchParams("center=13"))).toThrow(RangeError);
+    expect(() => parseEmbedView(new URLSearchParams("center=a,b"))).toThrow(RangeError);
+    expect(() => parseEmbedView(new URLSearchParams("zoom="))).toThrow(RangeError);
   });
 });

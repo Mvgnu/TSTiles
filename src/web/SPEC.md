@@ -11,11 +11,14 @@ paths:
 exports:
   - createMapViewer
   - static viewer
+  - styles CLI (npm run styles:build)
+  - docs/integration.md
 consumes:
   - contract.MapManifest
   - contract.VectorLayer
   - pmtiles.Protocol
   - maplibre-gl
+  - "@protomaps/basemaps"
 verification:
   check: npm run check
   test: npm run test:web
@@ -65,3 +68,26 @@ no matching visible features report an empty view. Raster, terrain, and
 background-only styles remain intact but report `unverified` ("Style only"):
 their content cannot establish that the configured vector archive rendered.
 `ready` is transport/display evidence, not a cartographic quality judgement.
+
+### Protomaps basemap styles (2026-10-29)
+
+`src/web/basemap.ts` (pure) and `src/web/styles-build.ts` (Node file I/O,
+entry `styles-cli.ts`) write one complete style per official flavor with an
+absolute `pmtiles://` archive URL, self-hosted glyph/sprite URLs and plain-text
+attribution. Each file is replaced by temp-file + fsync + rename; a failed
+build leaves no temp files, but a multi-flavor run is not one transaction.
+Input from a manifest is rejected unless its `vectorLayers` list every
+Protomaps source-layer the styles read; `--archive-url` input cannot be
+schema-checked. The MapLibre style-spec validator runs in the test suite only:
+`@maplibre/maplibre-gl-style-spec` is a transitive, undeclared package, so the
+CLI performs its own structural checks instead.
+
+Architecture gate: `scripts/architecture.mjs` (PM-owned) allows only
+`pmtiles`/`maplibre-gl` and no `node:` imports under `src/web/`. The style CLI
+needs `@protomaps/basemaps` and `node:fs/promises`, `node:path`, `node:util`,
+so `npm run test:architecture` fails until the PM approves those for
+`src/web/basemap.ts` and the Node-only `src/web/styles-build.ts`.
+
+`createMapViewer` accepts per-instance `center`/`zoom`; the static viewer reads
+`?center=lng,lat&zoom=z`. Browser rendering of the served Protomaps styles on
+itstiles.com and non-Latin label scripts remain unobserved until deploy.

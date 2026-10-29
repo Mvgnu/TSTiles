@@ -1,6 +1,6 @@
 import { createMapViewer, type MapViewer, type ViewerStatus } from "./embed.js";
 import { resolveHttpUrl } from "./manifest.js";
-import { iframeSnippet, PREVIEW_COLORS } from "./style.js";
+import { iframeSnippet, parseEmbedView, PREVIEW_COLORS, type EmbedView } from "./style.js";
 
 function element<T extends HTMLElement>(id: string, constructor: { new(): T }): T {
   const node = document.getElementById(id);
@@ -50,7 +50,9 @@ async function start(): Promise<void> {
   copyButton.disabled = true;
   try {
     manifestInput.value = resolveHttpUrl(selectedManifest, document.baseURI);
+    const view: EmbedView = parseEmbedView(parameters);
     const loaded = await createMapViewer({
+      ...view,
       container: mapElement,
       manifestUrl: selectedManifest,
       baseUrl: document.baseURI,
@@ -89,7 +91,7 @@ async function start(): Promise<void> {
       item.textContent = "Layer metadata is not included in this archive.";
       layers.append(item);
     }
-    snippet.textContent = iframeSnippet(location.href, loaded.manifestUrl, manifest.name);
+    snippet.textContent = iframeSnippet(location.href, loaded.manifestUrl, manifest.name, view);
     copyButton.disabled = false;
   } catch (error) {
     if (currentController.signal.aborted) return;
@@ -102,6 +104,9 @@ element("manifest-form", HTMLFormElement).addEventListener("submit", (event) => 
   try {
     const next = new URL(location.href);
     next.searchParams.set("manifest", resolveHttpUrl(manifestInput.value, document.baseURI));
+    // A different map has its own default view.
+    next.searchParams.delete("center");
+    next.searchParams.delete("zoom");
     location.assign(next.href);
   } catch (error) {
     setStatus({ state: "error", message: error instanceof Error ? error.message : "Enter an HTTP or HTTPS manifest URL." });
