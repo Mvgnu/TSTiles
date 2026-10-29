@@ -12,8 +12,19 @@ observed operating cost makes that useful.
 | --- | --- | --- |
 | `/archives/<sha256>.pmtiles` | Exact, immutable archive bytes | One year, immutable |
 | `/maps/<id>.json` | Current archive pointer and metadata | Revalidate every use (`no-cache`) |
-| `/`, `/index.html` | Map viewer | Revalidate every use |
+| `/`, `/index.html` | Landing page (`index.html`) | Revalidate every use |
+| `/impressum`, `/datenschutz`, `/nutzungsbedingungen` | Legal pages (`<name>.html`) | Revalidate every use |
+| `/impressum.html`, `/datenschutz.html`, `/nutzungsbedingungen.html` | `301` to the clean path (relative `Location`) | `no-store` |
+| `/robots.txt` | Optional crawler rules (404 when absent) | Five minutes, then revalidate |
 | `/assets/**`, `/styles/**` | Viewer bundles and supplied style resources | Five minutes, then revalidate |
+
+The HTML pages (`/`, `/index.html`, the legal pages) also send
+`Referrer-Policy: strict-origin-when-cross-origin` and
+`Content-Security-Policy: frame-ancestors 'self'`: nothing embeds them
+cross-site. There is no `X-Frame-Options`. Maps are embedded through
+manifests and styles, not by framing these pages. nginx sends the two headers
+on successful responses only; Caddy sends them on every response for these
+paths.
 
 Error responses use `no-store`. Caddy serves only these public paths, blocks
 dot paths, and does not enable directory listings. Its document root must be

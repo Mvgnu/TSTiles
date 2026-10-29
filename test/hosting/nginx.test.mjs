@@ -13,6 +13,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
+import { assertPageRoutes, writePages } from "./pages.mjs";
 
 // Real nginx against the same route/Range/CORS/cache table as ops/public.caddy. The routes and
 // http-context snippets are loaded unmodified from ops/nginx/. The production site file is
@@ -106,6 +107,7 @@ async function prepareSite(site) {
   await writeFile(join(site, archivePath), bytes);
   await writeFile(join(site, "maps", "basemap.json"), JSON.stringify({ archive: `..${archivePath}`, padding: "x".repeat(2_000) }));
   await writeFile(join(site, "index.html"), "<!doctype html><title>TSTiles transport fixture</title>");
+  await writePages(site);
   await writeFile(join(site, "assets", "viewer.js"), "export const fixture = true;\n".repeat(50));
   await writeFile(join(site, "assets", "viewer.css"), "body { margin: 0; }\n".repeat(50));
   await writeFile(join(site, "styles", "local.json"), JSON.stringify({ version: 8, padding: "y".repeat(2_000) }));
@@ -340,6 +342,10 @@ ${tempDirectives(root)}
         assert.equal(response.status, 404, `${method} /.env`);
         await response.arrayBuffer();
       }
+    });
+
+    await t.test("landing and legal pages, their .html redirects, and robots.txt", async () => {
+      await assertPageRoutes(request, site);
     });
   } finally {
     await stopNginx(state);

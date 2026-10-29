@@ -71,6 +71,20 @@ manifests, snapshots and restores `maps/*.json` together with
 `test/hosting/planet-update.test.mjs` drives it against a scratch volume
 served by real nginx, with two archives derived from the one-tile fixture.
 
+Page routes (ruling "public landing page, legal pages, backlink"), identical
+in `ops/public.caddy` and `ops/nginx/tstiles-routes.conf`:
+- `/` and `/index.html` serve the landing page.
+- `/impressum`, `/datenschutz` and `/nutzungsbedingungen` serve `<name>.html`
+  with the page policy: `no-cache` on 200/304, CORS, nosniff, `no-store` on
+  errors, `Referrer-Policy: strict-origin-when-cross-origin` and
+  `Content-Security-Policy: frame-ancestors 'self'` (no X-Frame-Options).
+- `/<name>.html` answers 301 with a relative `Location: /<name>`.
+- `/robots.txt` is optional and cached for five minutes; it is a 404 when
+  absent.
+
+There is no `/viewer` route. Both servers run the shared checks in
+`test/hosting/pages.mjs`.
+
 ## Known gaps
 
 Local HTTP evidence cannot prove a production TLS/domain configuration, real

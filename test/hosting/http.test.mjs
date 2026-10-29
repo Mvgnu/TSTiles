@@ -11,6 +11,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
+import { assertPageRoutes, writePages } from "./pages.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const caddy = process.env.CADDY_BIN || "caddy";
@@ -75,6 +76,7 @@ test("Caddy serves the real static publication boundary", { timeout: 30_000 }, a
     await writeFile(join(site, archivePath), bytes);
     await writeFile(join(site, "maps", "basemap.json"), JSON.stringify({ archive: `..${archivePath}` }));
     await writeFile(join(site, "index.html"), "<!doctype html><title>TSTiles transport fixture</title>");
+    await writePages(site);
     await writeFile(join(site, "assets", "viewer.js"), "export const fixture = true;\n");
     await writeFile(join(site, "styles", "local.json"), "{}\n");
     for (const privatePath of [".env", ".git/config", "package.json", "src/private.ts", "ops/Caddyfile", "assets/.env"]) {
@@ -212,6 +214,10 @@ test("Caddy serves the real static publication boundary", { timeout: 30_000 }, a
         assert.equal(response.headers.get("access-control-allow-origin"), "*", path);
         assert.doesNotMatch(await response.text(), /must not be served/, path);
       }
+    });
+
+    await t.test("landing and legal pages, their .html redirects, and robots.txt", async () => {
+      await assertPageRoutes(request, site);
     });
   } finally {
     if (server && server.exitCode === null && !spawnError) {

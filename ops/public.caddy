@@ -16,6 +16,14 @@
 	}
 }
 
+(tstiles_html_headers) {
+	header Cache-Control "no-cache" {
+		match status 200 304
+	}
+	header Referrer-Policy "strict-origin-when-cross-origin"
+	header Content-Security-Policy "frame-ancestors 'self'"
+}
+
 (tstiles_public) {
 	root * "{$TSTILES_ROOT:./site}"
 
@@ -52,9 +60,28 @@
 			file_server
 		}
 
+		# HTML pages: the landing page and the legal pages. Nothing frames them, so
+		# they refuse cross-site framing (CSP only; no X-Frame-Options).
 		@page path / /index.html
 		handle @page {
-			header Cache-Control "no-cache" {
+			import tstiles_html_headers
+			file_server
+		}
+
+		@legal path_regexp legal "^/(impressum|datenschutz|nutzungsbedingungen)$"
+		handle @legal {
+			import tstiles_html_headers
+			rewrite * /{re.legal.1}.html
+			file_server
+		}
+
+		# One URL per legal page: the file name redirects to the clean path.
+		@legalfile path_regexp legalfile "^/(impressum|datenschutz|nutzungsbedingungen)\.html$"
+		redir @legalfile /{re.legalfile.1} 301
+
+		@robots path /robots.txt
+		handle @robots {
+			header Cache-Control "public, max-age=300, must-revalidate" {
 				match status 200 304
 			}
 			file_server
