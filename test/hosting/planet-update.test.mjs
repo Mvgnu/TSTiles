@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -130,7 +130,14 @@ test("one-planet update, rollback and recovery keep every manifest and style on 
       assert.deepEqual(readdirSync(incoming).filter((name) => !name.startsWith(".")), [], "incoming names and staging are removed");
       for (const name of readdirSync(join(site, "archives"))) assert.equal(statSync(join(site, "archives", name)).nlink, 1, `${name} has one name`);
     };
-    const snapshotsNamed = (fragment) => readdirSync(snapshots).filter((name) => name.includes(fragment)).sort();
+    // Selected by the exact `label` recorded in snapshot.json, oldest first by its `created` time:
+    // directory names are not parsed (they share a time prefix and differ only in the label).
+    const snapshotsLabelled = (match) => readdirSync(snapshots)
+      .filter((name) => existsSync(join(snapshots, name, "snapshot.json")))
+      .map((name) => ({ name, ...JSON.parse(readFileSync(join(snapshots, name, "snapshot.json"), "utf8")) }))
+      .filter((record) => typeof match === "string" ? record.label === match : match.test(record.label))
+      .sort((left, right) => Date.parse(left.created) - Date.parse(right.created))
+      .map((record) => record.name);
 
     await t.test("first publication of a build (plan two on an empty site) passes the HTTP checks", async () => {
       const result = await operator(env, ["update", "20990101"]);
@@ -155,13 +162,13 @@ test("one-planet update, rollback and recovery keep every manifest and style on 
     });
 
     await t.test("rollback restores styles and manifests together while the old archive exists", async () => {
-      const [snapshot] = snapshotsNamed("before-20990102");
+      const [snapshot] = snapshotsLabelled("before-20990102");
       assert.ok(snapshot);
       const result = await operator(env, ["rollback", snapshot]);
       assert.equal(result.code, 0, result.output);
       assert.match(result.output, /HTTP checks against .*: ok/);
       await assertAllOn(site, A, "after rollback");
-      assert.equal(snapshotsNamed("before-rollback").length, 1, "rollback is itself snapshotted");
+      assert.equal(snapshotsLabelled(/^before-rollback-to-/).length, 1, "rollback is itself snapshotted");
     });
 
     await t.test("refusals change nothing: outage not accepted, no space, bad MD5, unknown build", async () => {
@@ -180,7 +187,7 @@ test("one-planet update, rollback and recovery keep every manifest and style on 
         await assertAllOn(site, A, args.join(" "));
       }
       await rm(join(incoming, "20990103.pmtiles"), { force: true });
-      await rm(join(snapshots, snapshotsNamed("before-20990103")[0]), { recursive: true, force: true });
+      await rm(join(snapshots, snapshotsLabelled("before-20990103")[0]), { recursive: true, force: true });
     });
 
     await t.test("a plan-one update deletes the old archive first, then serves only the new one", async () => {
@@ -194,7 +201,7 @@ test("one-planet update, rollback and recovery keep every manifest and style on 
     });
 
     await t.test("rollback to a deleted archive is refused with the re-download path; re-downloading restores it", async () => {
-      const snapshot = snapshotsNamed("before-20990102").at(-1);
+      const snapshot = snapshotsLabelled("before-20990102").at(-1);
       const refused = await operator(env, ["rollback", snapshot]);
       assert.notEqual(refused.code, 0);
       assert.match(refused.output, /no longer in[\s\S]*update 20990101 --plan one --allow-outage/);
@@ -204,6 +211,15 @@ test("one-planet update, rollback and recovery keep every manifest and style on 
       await assertAllOn(site, A, "after re-download rollback");
       assert.deepEqual(readdirSync(join(site, "archives")), [`${A}.pmtiles`]);
       clean();
+    });
+
+    await t.test("snapshots taken back to back are listed in true order, by name and by created time", async () => {
+      for (const label of ["burst-1", "burst-2", "burst-3"]) assert.equal((await operator(env, ["snapshot", label])).code, 0);
+      const listed = JSON.parse((await operator(env, ["status", "--json", "--offline"])).output).snapshots;
+      assert.deepEqual(listed, snapshotsLabelled(/./), "status lists by created time");
+      assert.deepEqual(listed, [...listed].sort(), "names sort like their times");
+      assert.equal(new Set(listed.map((name) => name.slice(0, 20))).size, listed.length, "every snapshot has a distinct time");
+      assert.deepEqual(listed.slice(-3).map((name) => name.slice(21)), ["burst-1", "burst-2", "burst-3"]);
     });
   } finally {
     await stopNginx(server);
