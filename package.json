@@ -21,9 +21,11 @@
     "archive:publish": "node dist/archive/cli.js publish",
     "demo:prepare": "node scripts/prepare-demo.mjs",
     "scope:check": "node scripts/check-scope.mjs",
-    "test:browser": "node scripts/browser-smoke.mjs"
+    "test:browser": "node scripts/browser-smoke.mjs",
+    "styles:build": "node dist/web/styles-cli.js"
   },
   "dependencies": {
+    "@protomaps/basemaps": "5.7.2",
     "maplibre-gl": "^5.15.0",
     "pmtiles": "4.3.0"
   },

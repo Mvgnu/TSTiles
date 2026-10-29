@@ -5,6 +5,7 @@ paths:
   owned:
     - src/web/
     - public/
+    - docs/integration.md
   tests:
     - test/web/
 exports:

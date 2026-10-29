@@ -29,4 +29,15 @@ await build({
   platform: "node",
   target: "node22",
 });
+// Operator CLI that writes ready-to-serve basemap styles; web-domain owned source.
+await build({
+  absWorkingDir: root,
+  entryPoints: ["src/web/styles-cli.ts"],
+  outdir: "dist/web",
+  bundle: true,
+  packages: "external",
+  format: "esm",
+  platform: "node",
+  target: "node22",
+});
 console.log("Built archive CLI and static MapLibre viewer. Existing site/maps and site/archives are preserved.");
