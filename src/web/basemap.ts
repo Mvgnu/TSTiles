@@ -12,7 +12,47 @@ export const BASEMAPS_VERSION = "5.7.2";
 export const PROTOMAPS_FLAVORS = ["light", "dark", "white", "grayscale", "black"] as const;
 export type ProtomapsFlavor = (typeof PROTOMAPS_FLAVORS)[number];
 export const PROTOMAPS_SOURCE = "protomaps";
+/** Plain-text credit, as manifests carry it (frozen contract: plain text). */
 export const DEFAULT_ATTRIBUTION = "Protomaps © OpenStreetMap contributors";
+
+/** A piece of style attribution: escaped text, or an allowlisted https link. */
+export type AttributionPart = string | { readonly text: string; readonly href: string };
+
+/**
+ * The served styles' credit. The itstiles.com link is the service's only
+ * condition of use, so every generated style carries it.
+ */
+export const BACKLINK_ATTRIBUTION: readonly AttributionPart[] = [
+  { text: "itstiles.com", href: "https://itstiles.com" },
+  " · ",
+  { text: "Protomaps", href: "https://protomaps.com" },
+  " © ",
+  { text: "OpenStreetMap", href: "https://www.openstreetmap.org/copyright" },
+];
+
+const ATTRIBUTION_HOSTS = new Set(["itstiles.com", "protomaps.com", "www.openstreetmap.org"]);
+
+/**
+ * Render attribution HTML. Text is always escaped; links are emitted only
+ * for https URLs on an allowlisted host, so no input can inject markup.
+ */
+export function renderAttribution(parts: readonly AttributionPart[]): string {
+  return parts.map((part) => {
+    if (typeof part === "string") return escapeHtml(part);
+    let url: URL;
+    try {
+      url = new URL(part.href);
+    } catch {
+      throw new StyleBuildError("Attribution link is not a URL: " + JSON.stringify(part.href));
+    }
+    if (url.protocol !== "https:" || !ATTRIBUTION_HOSTS.has(url.hostname) || url.username || url.password) {
+      throw new StyleBuildError("Attribution links must be https URLs on " + [...ATTRIBUTION_HOSTS].join(", ") + ".");
+    }
+    return '<a href="' + escapeHtml(url.href.replace(/\/$/u, "")) + '" target="_blank" rel="noopener">' + escapeHtml(part.text) + "</a>";
+  }).join("");
+}
+
+export const DEFAULT_ATTRIBUTION_HTML = renderAttribution(BACKLINK_ATTRIBUTION);
 export const DEFAULT_LANGUAGE = "en";
 export const SUPPORTED_LANGUAGES: readonly string[] = language_script_pairs.map((pair) => pair.lang);
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
@@ -98,8 +138,11 @@ export interface BasemapStyleOptions {
   readonly assetsBase: string;
   readonly flavor: ProtomapsFlavor;
   readonly lang: string;
-  /** Plain text; HTML-escaped into the source attribution. */
-  readonly attribution: string;
+  /**
+   * Optional extra plain-text credit, escaped and appended after the
+   * itstiles.com / Protomaps / OpenStreetMap links (which are always present).
+   */
+  readonly extraAttribution?: string;
 }
 
 /** A complete MapLibre style. Deterministic: same options, same JSON. */
@@ -118,7 +161,9 @@ export function buildBasemapStyle(options: BasemapStyleOptions): StyleSpecificat
       [PROTOMAPS_SOURCE]: {
         type: "vector",
         url: "pmtiles://" + options.archiveUrl,
-        attribution: escapeHtml(options.attribution),
+        attribution: renderAttribution(options.extraAttribution === undefined
+          ? BACKLINK_ATTRIBUTION
+          : [...BACKLINK_ATTRIBUTION, " · ", options.extraAttribution]),
       },
     },
     layers: layers(PROTOMAPS_SOURCE, namedFlavor(options.flavor), { lang: options.lang }),
@@ -146,8 +191,8 @@ export function styleProblems(style: StyleSpecification): string[] {
   const source = style.sources[PROTOMAPS_SOURCE];
   if (source?.type !== "vector" || typeof source.url !== "string" || !/^pmtiles:\/\/https?:\/\//u.test(source.url)) {
     problems.push("source " + PROTOMAPS_SOURCE + " must be a vector source with an absolute pmtiles:// URL");
-  } else if (typeof source.attribution !== "string" || source.attribution.length === 0) {
-    problems.push("source " + PROTOMAPS_SOURCE + " needs attribution");
+  } else if (typeof source.attribution !== "string" || !source.attribution.startsWith(DEFAULT_ATTRIBUTION_HTML)) {
+    problems.push("source " + PROTOMAPS_SOURCE + " attribution must start with the itstiles.com backlink");
   }
   if (style.layers.length === 0) problems.push("style has no layers");
   const ids = new Set<string>();

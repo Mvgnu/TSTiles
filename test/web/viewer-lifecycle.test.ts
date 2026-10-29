@@ -12,7 +12,9 @@ const renderer = vi.hoisted(() => {
     public resetCount = 0;
     public lastReset: unknown;
     public constructor(public readonly options: { style: unknown; center?: unknown; zoom?: unknown }) { MapStub.instances.push(this); }
-    public addControl(): void { /* Controls are independent of the readiness lifecycle. */ }
+    public controls: unknown[] = [];
+    public addControl(control: unknown): void { this.controls.push(control); }
+    public styleLoad(): void { this.listeners.get("style.load")?.(); }
     public fitBounds(bounds: unknown): void { this.resetCount += 1; this.lastReset = { fitBounds: bounds }; }
     public jumpTo(view: unknown): void { this.resetCount += 1; this.lastReset = { jumpTo: view }; }
     public on(name: string, listener: (event?: unknown) => void): void { this.listeners.set(name, listener); }
@@ -22,6 +24,11 @@ const renderer = vi.hoisted(() => {
     public idle(): void { this.listeners.get("idle")?.(); }
     public fail(): void { this.listeners.get("error")?.({ error: new Error("Tile fetch failed") }); }
     public failSource(sourceId: string): void { this.listeners.get("error")?.({ error: new Error("Bad response code: 404"), sourceId }); }
+    public refreshed: unknown[] = [];
+    public refreshTiles(sourceId: string, tiles: unknown): void { this.refreshed.push([sourceId, tiles]); }
+    public failTile(sourceId: string, error: Error = new TypeError("Failed to fetch")): void {
+      this.listeners.get("error")?.({ error, sourceId, tile: { tileID: { canonical: { x: 1, y: 2, z: 3 } } } });
+    }
   }
   return { MapStub };
 });
@@ -30,6 +37,7 @@ vi.mock("maplibre-gl", () => ({ default: {
   Map: renderer.MapStub,
   NavigationControl: class {},
   ScaleControl: class {},
+  AttributionControl: class { public constructor(public readonly options: unknown) {} },
   addProtocol: vi.fn(),
 } }));
 vi.mock("pmtiles", () => ({ Protocol: class { public tile = vi.fn(); } }));
@@ -286,6 +294,54 @@ describe("manifest-phase failures reach onStatus and the page", () => {
   });
 });
 
+describe("transient tile failures (concurrent loads) are not fatal", () => {
+  beforeEach(() => {
+    renderer.MapStub.instances = [];
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(manifest))));
+  });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+  it("retries a failed tile twice and stays ready while the view renders", async () => {
+    const { map, history } = await create(vectorStyle);
+    map.failTile("archive");
+    expect(history.some((status) => status.state === "error")).toBe(false);
+    vi.advanceTimersByTime(400);
+    expect(map.refreshed).toEqual([["archive", [{ x: 1, y: 2, z: 3 }]]]);
+    map.failTile("archive");
+    vi.advanceTimersByTime(800);
+    map.failTile("archive");
+    vi.advanceTimersByTime(5000);
+    expect(map.refreshed).toHaveLength(2); // bounded retries
+    map.features = [{ source: "archive" }];
+    map.idle();
+    expect(history.at(-1)?.state).toBe("ready");
+  });
+
+  it("reports a tile failure only when nothing is drawn, and recovers afterwards", async () => {
+    const { map, history } = await create(vectorStyle);
+    map.failTile("archive");
+    map.idle();
+    expect(history.at(-1)?.state).toBe("error");
+    expect(history.at(-1)?.message).toContain("Failed to fetch (https://maps.example/archives/fixture.pmtiles)");
+    map.features = [{ source: "archive" }];
+    map.idle();
+    expect(history.at(-1)?.state).toBe("ready");
+  });
+
+  it("ignores aborted tile requests and keeps source-level failures fatal", async () => {
+    const { map, history } = await create(vectorStyle);
+    map.failTile("archive", new DOMException("aborted", "AbortError"));
+    vi.advanceTimersByTime(5000);
+    expect(map.refreshed).toEqual([]);
+    map.failSource("archive");
+    map.features = [{ source: "archive" }];
+    map.idle();
+    expect(history.at(-1)?.state).toBe("error");
+  });
+});
+
 describe("status hints follow the gesture mode", () => {
   beforeEach(() => {
     renderer.MapStub.instances = [];
@@ -305,5 +361,31 @@ describe("status hints follow the gesture mode", () => {
     map.features = [{ source: "archive" }];
     map.idle();
     expect(history.at(-1)?.message).toContain(hint);
+  });
+
+  const attributionOf = (map: InstanceType<typeof renderer.MapStub>) =>
+    map.controls.find((control) => typeof control === "object" && control !== null && "options" in control
+      && typeof control.options === "object" && control.options !== null && "compact" in control.options);
+
+  it("keeps a supplied style's HTML credit (the itstiles.com link) and never compacts", async () => {
+    await createMapViewer({ container: "map", manifestUrl: "https://maps.example/maps/fixture.json", baseUrl: "https://a.example/" });
+    const map = renderer.MapStub.instances.at(-1);
+    if (!map) throw new Error("Viewer did not construct a map.");
+    expect(attributionOf(map)).toBeUndefined();
+    map.style = { ...vectorStyle, sources: { archive: { type: "vector", url: "pmtiles://x", attribution: '<a href="https://itstiles.com">itstiles.com</a>' } } };
+    map.styleLoad();
+    map.styleLoad();
+    expect(map.controls.filter((control) => control === attributionOf(map))).toHaveLength(1);
+    expect(attributionOf(map)).toMatchObject({ options: { compact: false, customAttribution: undefined } });
+  });
+
+  it("falls back to the manifest's plain-text credit, escaped, when the style has none", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ...manifest, attribution: "Daten <b>&</b> Co" }))));
+    await createMapViewer({ container: "map", manifestUrl: "https://maps.example/maps/fixture.json", baseUrl: "https://a.example/" });
+    const map = renderer.MapStub.instances.at(-1);
+    if (!map) throw new Error("Viewer did not construct a map.");
+    map.style = vectorStyle;
+    map.styleLoad();
+    expect(attributionOf(map)).toMatchObject({ options: { compact: false, customAttribution: "Daten &lt;b&gt;&amp;&lt;/b&gt; Co" } });
   });
 });

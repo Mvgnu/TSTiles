@@ -48,6 +48,19 @@ function registerProtocol(): void {
 }
 
 const MAX_LATITUDE = 85.05112878;
+const MAX_TILE_RETRIES = 2;
+
+/** Tile coordinates of a tile-level MapLibre error event, or undefined for other errors. */
+function tileOf(event: unknown): { sourceId: string; x: number; y: number; z: number } | undefined {
+  if (typeof event !== "object" || event === null || !("tile" in event) || !("sourceId" in event)) return undefined;
+  const { tile, sourceId } = event;
+  if (typeof sourceId !== "string" || typeof tile !== "object" || tile === null || !("tileID" in tile)) return undefined;
+  const id = tile.tileID;
+  const canonical = typeof id === "object" && id !== null && "canonical" in id ? id.canonical : undefined;
+  if (typeof canonical !== "object" || canonical === null || !("x" in canonical) || !("y" in canonical) || !("z" in canonical)) return undefined;
+  const { x, y, z } = canonical;
+  return typeof x === "number" && typeof y === "number" && typeof z === "number" ? { sourceId, x, y, z } : undefined;
+}
 
 function checkInitialView(options: ViewerOptions): void {
   const inRange = (value: unknown, min: number, max: number): boolean =>
@@ -137,7 +150,9 @@ export async function createMapViewer(options: ViewerOptions): Promise<MapViewer
     center: initialCenter,
     zoom: initialZoom,
     maxZoom: 24,
-    attributionControl: { compact: false, customAttribution: styleUrl === undefined ? undefined : escapeHtml(manifest.attribution) },
+    // Added below: never compact, so the credit (and the itstiles.com link in
+    // served styles) stays visible on phones too.
+    attributionControl: false,
     cooperativeGestures: options.cooperativeGestures ?? false,
     dragRotate: false,
     pitchWithRotate: false,
@@ -146,6 +161,24 @@ export async function createMapViewer(options: ViewerOptions): Promise<MapViewer
   map.addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-left");
   let failed = false;
   let destroyed = false;
+  if (styleUrl === undefined) {
+    // The preview style's source already carries the manifest credit.
+    map.addControl(new maplibregl.AttributionControl({ compact: false }), "bottom-right");
+  } else {
+    // A supplied style's own (HTML) source credits take precedence; the
+    // manifest's plain-text credit is shown, escaped, only if the style has none.
+    let attributionAdded = false;
+    map.on("style.load", () => {
+      if (attributionAdded || destroyed) return;
+      attributionAdded = true;
+      const styleCredits = Object.values(map.getStyle().sources).some((source) =>
+        "attribution" in source && typeof source.attribution === "string" && source.attribution.trim() !== "");
+      map.addControl(new maplibregl.AttributionControl({
+        compact: false,
+        customAttribution: styleCredits ? undefined : escapeHtml(manifest.attribution),
+      }), "bottom-right");
+    });
+  }
 
   const resetView = (): void => {
     if (hasInitialView) {
@@ -165,13 +198,36 @@ export async function createMapViewer(options: ViewerOptions): Promise<MapViewer
   };
   resetView();
 
+  // A failed request for one tile (one Range read) is transient: concurrent
+  // identical Range requests, a flaky connection or a cancelled fetch must not
+  // flip the whole map to "error" while the rest renders, as stock MapLibre
+  // keeps rendering too. Such tiles are retried; only if the view then shows
+  // nothing is the last tile failure reported. Style, sprite, glyph and
+  // source/archive-header failures stay fatal.
+  const tileAttempts = new Map<string, number>();
+  let tileFailure: string | undefined;
   map.on("error", (event) => {
     if (destroyed) return;
-    failed = true;
     let cause = (event.error?.message ?? "Unknown map error").slice(0, 350).replace(/\.\s*$/u, "");
     const sourceUrl = sourceUrlOf(map, event);
     if (sourceUrl !== undefined && !cause.includes(sourceUrl)) cause += " (" + sourceUrl + ")";
     const message = "Map resource failed: " + cause + ". Check archive Range/CORS support and the style's source layers and asset URLs, then retry.";
+    const tile = tileOf(event);
+    if (tile !== undefined) {
+      if (event.error?.name === "AbortError") return;
+      const key = tile.sourceId + "/" + tile.z + "/" + tile.x + "/" + tile.y;
+      const attempts = tileAttempts.get(key) ?? 0;
+      tileFailure = message;
+      if (attempts < MAX_TILE_RETRIES) {
+        tileAttempts.set(key, attempts + 1);
+        setTimeout(() => {
+          if (!destroyed) map.refreshTiles(tile.sourceId, [{ x: tile.x, y: tile.y, z: tile.z }]);
+        }, 400 * (attempts + 1));
+      }
+      console.warn("[itstiles] tile " + key + " failed (attempt " + (attempts + 1) + "): " + cause);
+      return;
+    }
+    failed = true;
     options.onStatus?.({ state: "error", message });
     if (showErrors) showError(options.container, message, true);
   });
@@ -182,11 +238,19 @@ export async function createMapViewer(options: ViewerOptions): Promise<MapViewer
     if (destroyed || failed) return;
     const visibleFeatures = map.queryRenderedFeatures().length;
     if (visibleFeatures > 0) {
+      clearError(options.container);
       options.onStatus?.({
         state: "ready",
         message: (styleUrl === undefined ? "Archive features visible. " : "Styled features visible. ") + gestureHint,
         visibleFeatures,
       });
+      return;
+    }
+    if (tileFailure !== undefined) {
+      // Nothing drawn and tiles failed: report it, but keep listening, so a
+      // successful retry or the next view still turns the map "ready".
+      options.onStatus?.({ state: "error", message: tileFailure });
+      if (showErrors) showError(options.container, tileFailure, true);
       return;
     }
     if (styleUrl !== undefined) {

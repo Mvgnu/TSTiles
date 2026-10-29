@@ -4,7 +4,7 @@ import { parseArgs } from "node:util";
 import type { StyleSpecification } from "maplibre-gl";
 import type { MapManifest } from "../contract.js";
 import {
-  DEFAULT_ATTRIBUTION,
+  DEFAULT_ATTRIBUTION_HTML,
   DEFAULT_LANGUAGE,
   PROTOMAPS_FLAVORS,
   StyleBuildError,
@@ -37,7 +37,9 @@ Required:
 Options:
   --flavors <list>              Default: ${PROTOMAPS_FLAVORS.join(",")}
   --lang <code>                 Label language. Default: ${DEFAULT_LANGUAGE}
-  --attribution <text>          Default: "${DEFAULT_ATTRIBUTION}"
+  --attribution <text>          Extra plain-text credit, appended to the fixed
+                                credit (always present):
+                                ${DEFAULT_ATTRIBUTION_HTML}
 
 URLs must be https:// (http:// only for localhost).`;
 
@@ -50,7 +52,7 @@ export interface StylesBuildRequest {
   readonly outDir: string;
   readonly flavors: readonly ProtomapsFlavor[];
   readonly lang: string;
-  readonly attribution: string;
+  readonly extraAttribution?: string;
 }
 
 export interface StylesBuildResult {
@@ -113,7 +115,7 @@ export function parseStylesArgs(argv: readonly string[]): StylesBuildRequest {
     outDir: resolve(required(values.out, "out")),
     flavors: parseFlavors(values.flavors ?? PROTOMAPS_FLAVORS.join(",")),
     lang: parseLanguage(values.lang ?? DEFAULT_LANGUAGE),
-    attribution: parseAttribution(values.attribution ?? DEFAULT_ATTRIBUTION),
+    extraAttribution: values.attribution === undefined ? undefined : parseAttribution(values.attribution),
   };
 }
 
@@ -209,7 +211,7 @@ export async function buildStyles(request: StylesBuildRequest, fetcher: typeof f
   const files = new Map<string, string>();
   for (const flavor of request.flavors) {
     const style = buildBasemapStyle({
-      archiveUrl, assetsBase: request.assetsBase, flavor, lang: request.lang, attribution: request.attribution,
+      archiveUrl, assetsBase: request.assetsBase, flavor, lang: request.lang, extraAttribution: request.extraAttribution,
     });
     const problems = styleProblems(style);
     if (problems.length > 0) throw new StyleBuildError("Generated " + flavor + " style is invalid: " + problems.join("; "));

@@ -11,9 +11,10 @@ paths:
     - test/web/
 exports:
   - createMapViewer
-  - static viewer
+  - landing page and legal pages
   - styles CLI (npm run styles:build)
   - docs/integration.md
+  - docs/styleguide.md
 consumes:
   - contract.MapManifest
   - contract.VectorLayer
@@ -39,15 +40,20 @@ relative to the manifest URL. Register the official PMTiles protocol once per
 MapLibre instance. Configuration belongs to each map instance, never a site
 constant. Keep attribution visible; treat manifest attribution as plain text.
 
-The static example selects its manifest with `?manifest=` and defaults to
-`./maps/fixture.json`. Without a supplied style it renders a clearly labelled
-data preview using the archive's vector layer IDs. It must draw the fixture's
-polygon. This is a data inspector, not a finished basemap. With a supplied style
-use its complete URL intact; do not rewrite unrelated vector/raster/GeoJSON
-sources or silently replace missing glyphs/sprites with remote providers.
+The public site (ruling 2026-10-29, later; owner scope change) is exactly a
+German landing page (`public/index.html`, live hero map of `./maps/light.json`
+via `createMapViewer`, flavor switcher, copy snippets) and three legal pages
+(`impressum.html`, `datenschutz.html`, `nutzungsbedingungen.html`). There is
+no standalone viewer page and no `?manifest=`/`?embed=1` iframe path. The
+landing script is `src/web/main.ts`, still bundled as `assets/viewer.js` by the
+PM-owned build entry `viewer`. Without a supplied style `createMapViewer`
+renders a clearly labelled data preview using the archive's vector layer IDs
+(not a finished basemap). With a supplied style use its complete URL intact;
+do not rewrite unrelated sources or silently replace missing glyphs/sprites.
 
-Bundle JavaScript and CSS locally. The integration must expose a small reusable
-map constructor and a static embedding path. Loading, error, and data-preview
+Bundle JavaScript and CSS locally; the site makes no third-party requests and
+sets no cookies. The integration exposes a small reusable map constructor
+(`/assets/embed.js`). Loading, error, and data-preview
 states must remain legible on 390px phones and 1440px desktops. Never claim a
 map loaded merely because the HTML shell or WebGL context exists.
 
@@ -90,9 +96,20 @@ Architecture gate: per the PM ruling, `@protomaps/basemaps` is allowed in
 manifest-phase failures (fetch, HTTP status, JSON, validation, initial view)
 emit it with the exact message the promise rejects with; map/source errors
 name the failing source URL. By default (`showErrors`) the message is also
-shown in the container as `.tstiles-error[role=alert]`; the static viewer
-turns this off and uses its own status bar. Caller aborts are not errors.
+shown in the container as `.tstiles-error[role=alert]`. Caller aborts are not
+errors. A failed request for a single tile (event with `tile`) is transient:
+it is retried up to twice via `map.refreshTiles` and reported only if the view
+then draws nothing; style/sprite/glyph/source-header failures stay fatal. This
+fixed concurrent loads of two viewers (identical Range requests in one browser
+context) turning a rendering map into "error".
 
-`createMapViewer` accepts per-instance `center`/`zoom`; the static viewer reads
-`?center=lng,lat&zoom=z`. Browser rendering of the served Protomaps styles on
-itstiles.com and non-Latin label scripts remain unobserved until deploy.
+Attribution: served styles carry fixed HTML credit (itstiles.com · Protomaps ©
+OpenStreetMap links; allowlisted https hosts, all text escaped); `--attribution`
+only appends escaped plain text. `createMapViewer` adds a never-compact
+attribution control; a supplied style's own credits take precedence, the
+manifest's plain-text attribution is shown (escaped) only when the style has
+none. `createMapViewer` accepts per-instance `center`/`zoom`.
+
+Legal texts are templates from the owner's facts, marked as unreviewed in each
+file; they need the owner's (legal) review. Non-Latin label scripts remain
+unobserved.
