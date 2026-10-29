@@ -244,6 +244,122 @@ bundles have a five-minute cache lifetime, so allow that window for mixed
 client versions; a breaking viewer change needs a coordinated release or
 versioned viewer path. The data-only rollback above does not roll back code.
 
+## Existing nginx host (itstiles.com)
+
+The production host `https://itstiles.com` is a shared VPS whose nginx already
+owns 80/443 for other sites. There, nginx itself serves the static files; no
+Caddy or Docker runs. `ops/nginx/` reproduces the route table above:
+
+| File (repository) | Installed as | Context |
+| --- | --- | --- |
+| `ops/nginx/tstiles-http.conf` | `/etc/nginx/snippets/tstiles-http.conf` | http (`$tstiles_*` maps), included once by the site file |
+| `ops/nginx/tstiles-routes.conf` | `/etc/nginx/snippets/tstiles-routes.conf` | server: routes, CORS, cache, MIME |
+| `ops/nginx/tstiles-cloudflare-realip.conf` | `/etc/nginx/snippets/tstiles-cloudflare-realip.conf` | server: trust `CF-Connecting-IP` from Cloudflare only |
+| `ops/nginx/itstiles.com.bootstrap.conf` | `/etc/nginx/sites-available/itstiles.com` (before the certificate) | :80 ACME only, 404 otherwise |
+| `ops/nginx/itstiles.com.conf` | `/etc/nginx/sites-available/itstiles.com` (after the certificate) | :80 ACME + 301, :443 apex, www 301 |
+
+Other sites' files are not touched. The site has no `default_server` and no
+`reuseport`. `test:hosting` runs real nginx against the routes snippet
+unmodified, and validates and runs a copy of the site file whose host paths
+and ports point into a temporary directory.
+
+### Install
+
+Point DNS (A/AAAA for `itstiles.com` and `www.itstiles.com`) at the VPS,
+DNS-only while the certificate is issued. As root:
+
+```sh
+install -m 0644 ops/nginx/tstiles-http.conf ops/nginx/tstiles-routes.conf \
+  ops/nginx/tstiles-cloudflare-realip.conf /etc/nginx/snippets/
+install -m 0644 ops/nginx/itstiles.com.bootstrap.conf /etc/nginx/sites-available/itstiles.com
+ln -s /etc/nginx/sites-available/itstiles.com /etc/nginx/sites-enabled/itstiles.com
+nginx -t && systemctl reload nginx
+certbot certonly --webroot -w /var/www/letsencrypt -d itstiles.com -d www.itstiles.com
+install -m 0644 ops/nginx/itstiles.com.conf /etc/nginx/sites-available/itstiles.com
+nginx -t && systemctl reload nginx
+```
+
+Never use `certbot --nginx`; it would rewrite the site file. Renewal reuses
+the webroot. Rollback at any step:
+`rm /etc/nginx/sites-enabled/itstiles.com && nginx -t && systemctl reload nginx`.
+Static file changes need no reload.
+
+Content lives at `/mnt/tstiles/site` (the dedicated volume). nginx workers run
+as `www-data` and need read access only: directories `0755`, files `0644`,
+owned by the operator (for example `chown -R root:root` and
+`chmod -R u=rwX,go=rX /mnt/tstiles/site`). Do not make it writable by
+`www-data`. Keep it free of symlinks and dot files (dot paths are 404 anyway).
+
+The host enables brotli and `brotli_static` http-wide. The site file turns
+brotli off for the whole site, because PMTiles/glyph bytes must not be
+re-encoded and the shared routes snippet cannot name a module that stock
+nginx lacks. gzip stays on for JSON/JS/CSS and is off for archives and `.pbf`.
+Nothing is proxied, so large responses go out with `sendfile` and never touch
+nginx temp files.
+
+### Logs and disk
+
+The root disk is shared and nearly full. The access log
+(`/var/log/nginx/itstiles.access.log`, buffered) omits successful archive reads
+(200/206/304): a single map view makes dozens of Range requests. Archive errors
+and every other request are logged. Missing files are not repeated in the
+error log (`log_not_found off`). The `.log` suffix puts both files under the
+host's existing `/etc/logrotate.d/nginx` (daily, 14 compressed). To measure
+archive traffic for a while, temporarily remove `if=$tstiles_loggable` from
+the site file and reload; watch `df -h /`.
+
+### Cloudflare: DNS-only versus proxied
+
+`tstiles-cloudflare-realip.conf` is harmless while DNS-only: real IPs are only
+taken from Cloudflare's published ranges. If the record is later proxied:
+
+- Set SSL/TLS mode to **Full (strict)**; the origin has a valid certificate.
+- Cloudflare forwards Range requests. A file over 512 MB (Free/Pro/Business) is
+  never cached, so the planet archive is always fetched from the VPS; small
+  manifests, styles, and glyphs may be cached according to their headers.
+- Do not enable features that transform responses (Polish, Mirage, Rocket
+  Loader, Email Obfuscation, compression rules for `application/octet-stream`).
+  Re-run the curl checks below through the proxy; they must stay identical.
+- Refresh the real-IP ranges when Cloudflare changes them.
+
+### One planet: capacity and updates
+
+The 147 GB volume holds one planet archive (about 139 GB). Publication must not
+copy it: the archive publisher's same-filesystem hard-link mode links the file
+to `archives/<sha256>.pmtiles` and writes the manifest last. Updating the planet
+therefore needs either a larger volume or a deliberate removal of the old
+archive first, which breaks pages still using it until they reload the
+manifest. That retention choice is the operator's; the general update section
+above (keep old archives) assumes spare space this host does not have. Embed
+maps through `/maps/<id>.json` or a served style, never a hard-coded digest URL.
+
+### Verify the live host
+
+```sh
+# The digest is the archive named in https://itstiles.com/maps/<id>.json.
+ARCHIVE=https://itstiles.com/archives/REPLACE_WITH_SHA256.pmtiles
+curl -sS -D - -o /tmp/h.bin -H 'Origin: https://your-site.example' \
+  -H 'Accept-Encoding: gzip, br' -r 0-126 "$ARCHIVE"; wc -c /tmp/h.bin
+curl -sS -D - -o /dev/null -X OPTIONS -H 'Origin: https://your-site.example' \
+  -H 'Access-Control-Request-Method: GET' -H 'Access-Control-Request-Headers: range' "$ARCHIVE"
+curl -sS -D - -o /dev/null https://itstiles.com/maps/basemap.json
+curl -sS -D - -o /dev/null https://itstiles.com/.env
+curl -sS -D - -o /dev/null http://itstiles.com/ ; curl -sS -D - -o /dev/null https://www.itstiles.com/
+```
+
+Expect: `206`, `Content-Range: bytes 0-126/<size>`, 127 bytes, no
+`Content-Encoding`, `Access-Control-Allow-Origin: *` once,
+`Cache-Control: public, max-age=31536000, immutable`, and
+`Strict-Transport-Security: max-age=31536000`; preflight `204` with
+`Access-Control-Max-Age: 3600`; manifest `no-cache`; `/.env` `404` with
+`no-store`; both redirects `301` to `https://itstiles.com/`.
+
+Two nginx-specific differences from Caddy are deliberate and tested: an
+unsatisfiable range (`416`) carries the archive's cache policy *and*
+`no-store` (nginx runs its header filters twice for a 416; `no-store`
+governs), and a `206` has no `Accept-Ranges` header (the `200`/HEAD response
+does).
+
 ## Optional S3-compatible storage
 
 S3 is an API, not a requirement to use Amazon. Keep each PMTiles archive intact.
