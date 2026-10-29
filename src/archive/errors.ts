@@ -4,6 +4,8 @@ export type ArchiveErrorCode =
   | "LIMIT_EXCEEDED"
   | "INPUT_CHANGED"
   | "INVALID_OPTIONS"
+  | "CROSS_FILESYSTEM"
+  | "LINK_UNSUPPORTED"
   | "DESTINATION_CORRUPT"
   | "ABORTED"
   | "IO_ERROR";
