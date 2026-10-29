@@ -56,7 +56,7 @@ test("each active implementation path has exactly one declared owner", () => {
 
 test("default toolchain cannot install or run the archived SaaS", () => {
   const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
-  assert.deepEqual(Object.keys(pkg.dependencies).sort(), ["maplibre-gl", "pmtiles"]);
+  assert.deepEqual(Object.keys(pkg.dependencies).sort(), ["@protomaps/basemaps", "maplibre-gl", "pmtiles"]);
   assert.equal(pkg.workspaces, undefined);
   for (const command of Object.values(pkg.scripts)) assert.doesNotMatch(command, /legacy|prisma|db:push|accept-data-loss|passWithNoTests/);
   const tsconfig = JSON.parse(readFileSync(resolve(root, "tsconfig.json"), "utf8"));
