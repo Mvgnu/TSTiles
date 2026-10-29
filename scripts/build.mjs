@@ -1,5 +1,6 @@
 import { build } from "esbuild";
-import { cp, mkdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { cp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -40,4 +41,17 @@ await build({
   platform: "node",
   target: "node22",
 });
+// Fixed asset names may sit in browser/CDN caches for hours; version the
+// references in our own pages so a new page never runs an old script.
+const versions = new Map();
+for (const name of await readdir(resolve(root, "site/assets"))) {
+  const bytes = await readFile(resolve(root, "site/assets", name));
+  versions.set(name, createHash("sha256").update(bytes).digest("hex").slice(0, 12));
+}
+for (const page of (await readdir(resolve(root, "site"))).filter(name => name.endsWith(".html"))) {
+  const path = resolve(root, "site", page);
+  const html = await readFile(path, "utf8");
+  await writeFile(path, html.replace(/(["'])\.\/assets\/([\w.@-]+)\1/g, (match, quote, name) =>
+    versions.has(name) ? `${quote}./assets/${name}?v=${versions.get(name)}${quote}` : match));
+}
 console.log("Built archive CLI and static MapLibre viewer. Existing site/maps and site/archives are preserved.");
