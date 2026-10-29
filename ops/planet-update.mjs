@@ -59,7 +59,8 @@ class OperatorError extends Error {}
 const fail = (message) => { throw new OperatorError(message); };
 const log = (message) => console.log(message);
 const gib = (bytes) => `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
-const stamp = () => new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+// 20261029T113923.123Z: fixed width, so names sort like their times.
+const stamp = (date) => date.toISOString().replace(/[-:]/g, "");
 
 function usage() {
   return readFileSync(new URL(import.meta.url), "utf8").split("\n").slice(1, 30).map((line) => line.replace(/^\/\/ ?/, "")).join("\n");
@@ -180,9 +181,25 @@ async function md5Base64(path) {
   return hash.digest("base64");
 }
 
+/** Snapshots oldest first, by the `created` time recorded inside each one (not by directory name). */
+function listSnapshots() {
+  if (!existsSync(SNAPSHOTS)) return [];
+  return readdirSync(SNAPSHOTS)
+    .filter((name) => existsSync(join(SNAPSHOTS, name, "snapshot.json")))
+    .map((name) => {
+      const record = JSON.parse(readFileSync(join(SNAPSHOTS, name, "snapshot.json"), "utf8"));
+      return { name, label: record.label, created: Date.parse(record.created) || 0 };
+    })
+    .sort((left, right) => left.created - right.created || left.name.localeCompare(right.name));
+}
+
 async function snapshot(label) {
   const inv = await inventory();
-  let name = `${stamp()}-${(label || "manual").replace(/[^a-zA-Z0-9_.-]/g, "-")}`;
+  // Monotonic millisecond time: a snapshot taken in the same millisecond as (or, after a clock
+  // step, before) the newest one still sorts after it, by name and by `created`.
+  const newest = listSnapshots().at(-1)?.created ?? 0;
+  const created = new Date(Math.max(Date.now(), newest + 1));
+  let name = `${stamp(created)}-${(label || "manual").replace(/[^a-zA-Z0-9_.-]/g, "-")}`;
   if (existsSync(join(SNAPSHOTS, name))) name = `${name}-${process.pid}`;
   const dir = join(SNAPSHOTS, name);
   await mkdir(join(dir, "maps"), { recursive: true });
@@ -190,7 +207,7 @@ async function snapshot(label) {
   for (const file of await jsonFiles(MAPS)) await copyFile(join(MAPS, file), join(dir, "maps", file));
   for (const file of await jsonFiles(STYLES)) await copyFile(join(STYLES, file), join(dir, "styles", "protomaps", file));
   const record = {
-    created: new Date().toISOString(),
+    created: created.toISOString(),
     label: label || "manual",
     build: await currentBuild(inv),
     archives: Object.fromEntries([...inv.referenced].map((digest) => [digest, inv.archives[digest]])),
@@ -440,7 +457,7 @@ async function status(args) {
   if (digests.size > 1) problems.push(`manifests/styles disagree: ${[...digests].join(", ")}`);
   const http = flags.offline ? null : await httpChecks(inv);
   if (http) problems.push(...http);
-  const snapshots = existsSync(SNAPSHOTS) ? readdirSync(SNAPSHOTS).filter((name) => existsSync(join(SNAPSHOTS, name, "snapshot.json"))).sort() : [];
+  const snapshots = listSnapshots().map((entry) => entry.name);
   const free = existsSync(ARCHIVES) ? await freeBytes(ARCHIVES) : null;
   const result = { build: await currentBuild(inv), digests: [...digests], manifests: inv.manifests, styles: inv.styles, archives: inv.archives, freeBytes: free, snapshots, http: http ? (http.length ? "failed" : "ok") : "skipped", problems };
   if (flags.json) {
